@@ -84,6 +84,7 @@ local State = {
     ClockTime      = 14,
     Hoodwink       = false,
     HideUsername   = false,
+    BindIsland     = true,
     ESP_SurvivorColorHex  = "8CB4DC",
     ESP_KillerColorHex    = "C85555",
     ESP_GeneratorColorHex = "8CC89B",
@@ -577,6 +578,161 @@ local function setHoodwink(on)
     end
 end
 
+-- ==================== KEYBINDS + BIND ISLAND ====================
+-- Middle-click a toggle -> press a key. Esc clears the bind.
+local BindList, Binding = {}, nil
+local ISL_W = 280
+
+local KEY_ALIAS = {
+    LeftShift = "LShift", RightShift = "RShift", LeftControl = "LCtrl", RightControl = "RCtrl",
+    LeftAlt = "LAlt", RightAlt = "RAlt", Return = "Enter", Backspace = "Bksp", Space = "Space",
+    Zero = "0", One = "1", Two = "2", Three = "3", Four = "4",
+    Five = "5", Six = "6", Seven = "7", Eight = "8", Nine = "9",
+    Insert = "Ins", Delete = "Del", PageUp = "PgUp", PageDown = "PgDn",
+}
+local function keyDisplay(kc) return KEY_ALIAS[kc.Name] or kc.Name end
+local function keyFromName(nm)
+    local ok, kc = pcall(function() return Enum.KeyCode[nm] end)
+    return ok and kc or nil
+end
+
+local Island = new("CanvasGroup", {
+    Name = "BindIsland", Size = UDim2.fromOffset(ISL_W, 40),
+    Position = UDim2.new(0.5, 0, 0, 48), AnchorPoint = Vector2.new(0.5, 0),
+    BackgroundColor3 = C.Glass, BackgroundTransparency = 0.28, BorderSizePixel = 0,
+    GroupTransparency = 1, Visible = false, ZIndex = 260,
+}, ScreenGui)
+corner(Island, 18)
+glassStroke(Island, 1)
+sheen(Island, 0.14, 35, 18)
+
+local IslandList = new("Frame", {
+    Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, ZIndex = 3,
+}, Island)
+new("UIPadding", {
+    PaddingTop = UDim.new(0, 10), PaddingBottom = UDim.new(0, 10),
+    PaddingLeft = UDim.new(0, 14), PaddingRight = UDim.new(0, 14),
+}, IslandList)
+new("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }, IslandList)
+
+local islandToken = 0
+local function refreshIsland()
+    for _, c in ipairs(IslandList:GetChildren()) do
+        if c:IsA("GuiObject") then c:Destroy() end
+    end
+
+    local n = 0
+    if Binding then
+        n = n + 1
+        local lbl = new("TextLabel", {
+            Size = UDim2.new(1, 0, 0, 20), BackgroundTransparency = 1,
+            Text = "Press a key for " .. Binding.label .. "  ·  Esc = clear",
+            TextColor3 = C.Accent, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left,
+            TextTruncate = Enum.TextTruncate.AtEnd, LayoutOrder = n, ZIndex = 4, Active = false,
+        }, IslandList)
+        fontMed(lbl)
+    end
+
+    if State.BindIsland then
+        for _, e in ipairs(BindList) do
+            if e.key then
+                n = n + 1
+                local on = e.isOn()
+                local row = new("Frame", {
+                    Size = UDim2.new(1, 0, 0, 20), BackgroundTransparency = 1, LayoutOrder = n, ZIndex = 4,
+                }, IslandList)
+                local dot = new("Frame", {
+                    Size = UDim2.fromOffset(6, 6), Position = UDim2.new(0, 0, 0.5, -3),
+                    BackgroundColor3 = on and C.Green or C.TextFaint, BorderSizePixel = 0, ZIndex = 5,
+                }, row)
+                corner(dot, 3)
+                local nm = new("TextLabel", {
+                    Size = UDim2.new(1, -62, 1, 0), Position = UDim2.fromOffset(14, 0), BackgroundTransparency = 1,
+                    Text = e.label, TextColor3 = on and C.Text or C.TextDim, TextSize = 11,
+                    TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd,
+                    ZIndex = 5, Active = false,
+                }, row)
+                fontMed(nm)
+                local tag = new("Frame", {
+                    Size = UDim2.fromOffset(46, 16), Position = UDim2.new(1, -46, 0.5, -8),
+                    BackgroundColor3 = C.White, BackgroundTransparency = 0.9, BorderSizePixel = 0, ZIndex = 5,
+                }, row)
+                corner(tag, 6)
+                local tl = new("TextLabel", {
+                    Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Text = keyDisplay(e.key),
+                    TextColor3 = C.TextDim, TextSize = 10, ZIndex = 6, Active = false,
+                }, tag)
+                fontMed(tl)
+            end
+        end
+    end
+
+    islandToken = islandToken + 1
+    if n > 0 then
+        local h = 20 + n * 20 + math.max(0, n - 1) * 4
+        Island.Visible = true
+        tween(Island, 0.25, { Size = UDim2.fromOffset(ISL_W, h), GroupTransparency = 0 }, Enum.EasingStyle.Quint)
+    else
+        local tok = islandToken
+        tween(Island, 0.2, { GroupTransparency = 1 })
+        task.delay(0.22, function() if tok == islandToken then Island.Visible = false end end)
+    end
+end
+
+local function startBinding(entry)
+    local prev = Binding
+    Binding = entry
+    if prev and prev ~= entry then prev.refreshBadge() end
+    entry.refreshBadge()
+    refreshIsland()
+    pushLog("Press a key for " .. entry.label .. " (Esc = clear)", "info")
+end
+
+local function cancelBinding()
+    if not Binding then return end
+    local e = Binding
+    Binding = nil
+    e.refreshBadge()
+    refreshIsland()
+end
+
+local function clearAllBinds()
+    Binding = nil
+    for _, e in ipairs(BindList) do e.key = nil e.refreshBadge() end
+    refreshIsland()
+    pushLog("All binds cleared", "info")
+end
+
+track(UserInputService.InputBegan:Connect(function(input, processed)
+    if Binding then
+        local ut = input.UserInputType
+        if ut == Enum.UserInputType.Keyboard then
+            local e, kc = Binding, input.KeyCode
+            if kc == Enum.KeyCode.Unknown then return end
+            Binding = nil
+            if kc == Enum.KeyCode.Escape then
+                e.key = nil
+                pushLog("Bind cleared: " .. e.label, "warn")
+            elseif kc == KEY_TOGGLE then
+                pushLog(keyDisplay(kc) .. " is reserved for the menu", "error")
+            else
+                e.key = kc
+                pushLog("Bind: " .. e.label .. " → " .. keyDisplay(kc), "success")
+            end
+            e.refreshBadge()
+            refreshIsland()
+        elseif ut == Enum.UserInputType.MouseButton1 or ut == Enum.UserInputType.MouseButton2 then
+            cancelBinding()
+        end
+        return
+    end
+
+    if processed or input.UserInputType ~= Enum.UserInputType.Keyboard then return end
+    for _, e in ipairs(BindList) do
+        if e.key and e.key == input.KeyCode then e.toggle() end
+    end
+end))
+
 -- ==================== TAB SYSTEM ====================
 local Tabs, Pages = {}, {}
 
@@ -823,7 +979,7 @@ local function createToggle(parent, label, default, order, callback, stateKey, c
     row.ClipsDescendants = true
 
     local lbl = new("TextLabel", {
-        Size = UDim2.new(1, colorOpt and -130 or -90, 0, HEAD), Position = UDim2.fromOffset(16, 0),
+        Size = UDim2.new(1, colorOpt and -200 or -160, 0, HEAD), Position = UDim2.fromOffset(16, 0),
         BackgroundTransparency = 1, Text = label, TextColor3 = C.Text, TextSize = 12,
         TextXAlignment = Enum.TextXAlignment.Left, Active = false, ZIndex = 4,
     }, row)
@@ -856,6 +1012,7 @@ local function createToggle(parent, label, default, order, callback, stateKey, c
             BackgroundColor3 = val and C.White or Color3.fromRGB(196, 202, 218),
         })
         if callback then callback(val, silent) end
+        refreshIsland()
     end
 
     local hit = new("TextButton", {
@@ -863,6 +1020,42 @@ local function createToggle(parent, label, default, order, callback, stateKey, c
     }, row)
     hoverRow(row, hit)
     hit.MouseButton1Click:Connect(function() update(not isOn) end)
+
+    -- keybind: middle-click to bind
+    local badge = new("Frame", {
+        Size = UDim2.fromOffset(46, 20), Position = UDim2.new(1, colorOpt and -150 or -112, 0, 10),
+        BackgroundColor3 = C.White, BackgroundTransparency = 0.9, BorderSizePixel = 0,
+        Visible = false, ZIndex = 4, Active = false,
+    }, row)
+    corner(badge, 7)
+    glassStroke(badge, 0.6)
+    local badgeLbl = new("TextLabel", {
+        Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Text = "", TextColor3 = C.TextDim,
+        TextSize = 10, ZIndex = 5, Active = false,
+    }, badge)
+    fontMed(badgeLbl)
+
+    local entry = { id = label, label = label, key = nil }
+    entry.isOn = function() return isOn end
+    entry.toggle = function() update(not isOn) end
+    entry.refreshBadge = function()
+        if Binding == entry then
+            badge.Visible = true
+            badgeLbl.Text = "..."
+            badgeLbl.TextColor3 = C.Accent
+        elseif entry.key then
+            badge.Visible = true
+            badgeLbl.Text = keyDisplay(entry.key)
+            badgeLbl.TextColor3 = C.TextDim
+        else
+            badge.Visible = false
+        end
+    end
+    BindList[#BindList + 1] = entry
+
+    hit.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton3 then startBinding(entry) end
+    end)
 
     -- color wheel
     if colorOpt then
@@ -1302,29 +1495,41 @@ local backWalkConn
 local function setBackWalk(on)
     State.BackWalk = on
     if backWalkConn then backWalkConn:Disconnect() backWalkConn = nil end
+
     local char = LocalPlayer.Character
     local hum = char and char:FindFirstChildOfClass("Humanoid")
     if hum and not State.Spin then hum.AutoRotate = not on end
     if not on then return end
 
+    -- The local player owns the physics of their own character, so whatever we do to
+    -- HumanoidRootPart is replicated to the server and to every other player.
+    -- We apply the rotation right BEFORE the physics step (PreSimulation) so that the
+    -- replicated state is already the final one, and we zero the angular velocity so
+    -- other clients don't interpolate a wrong spin.
+    local okSig, signal = pcall(function() return RunService.PreSimulation end)
+    if not okSig or not signal then signal = RunService.Stepped end
+
     local smoothedLook = nil
-    backWalkConn = RunService.Heartbeat:Connect(function(dt)
+    backWalkConn = signal:Connect(function(_, dt)
+        dt = type(dt) == "number" and dt or 1 / 60
         if State.Spin then return end
         local c = LocalPlayer.Character
         if not c then return end
-        local h = c:FindFirstChildOfClass("Humanoid")
+        local h   = c:FindFirstChildOfClass("Humanoid")
         local hrp = c:FindFirstChild("HumanoidRootPart")
-        if not h or not hrp then return end
+        if not h or not hrp or h.Health <= 0 or h.Sit then return end
         h.AutoRotate = false
+
         local md = h.MoveDirection
         if md.Magnitude > 0.05 then
             local target = Vector3.new(-md.X, 0, -md.Z)
             if target.Magnitude > 0.01 then
                 target = target.Unit
-                smoothedLook = smoothedLook and smoothedLook:Lerp(target, math.clamp(dt * 9, 0, 1)) or target
+                smoothedLook = smoothedLook and smoothedLook:Lerp(target, math.clamp(dt * 12, 0, 1)) or target
+                if smoothedLook.Magnitude < 0.01 then smoothedLook = target end
                 local pos = hrp.Position
-                local desired = CFrame.lookAt(pos, pos + smoothedLook)
-                hrp.CFrame = hrp.CFrame:Lerp(desired, math.clamp(dt * 18, 0, 1))
+                hrp.CFrame = CFrame.lookAt(pos, pos + smoothedLook)
+                hrp.AssemblyAngularVelocity = Vector3.zero
             end
         else
             smoothedLook = nil
@@ -1484,6 +1689,10 @@ local function saveConfig()
     for k, v in pairs(State) do
         if k ~= "Open" and type(v) ~= "function" and type(v) ~= "table" then data[k] = v end
     end
+    data.Binds = {}
+    for _, e in ipairs(BindList) do
+        if e.key then data.Binds[e.id] = e.key.Name end
+    end
     local ok, err = pcall(function() writefile(CONFIG_FILE, HttpService:JSONEncode(data)) end)
     if ok then pushLog("Config saved (" .. CONFIG_FILE .. ")", "success")
     else pushLog("Save error: " .. tostring(err), "error") end
@@ -1495,6 +1704,16 @@ local function applyConfigData(data, silent)
             pcall(function() w.Set(data[key]) end)
             State[key] = data[key]
         end
+    end
+    local binds = (data == DEFAULT_STATE) and {} or data.Binds
+    if type(binds) == "table" then
+        Binding = nil
+        for _, e in ipairs(BindList) do
+            local nm = binds[e.id]
+            e.key = type(nm) == "string" and keyFromName(nm) or nil
+            e.refreshBadge()
+        end
+        refreshIsland()
     end
     if not silent then pushLog("Config applied", "success") end
 end
@@ -1621,16 +1840,35 @@ createToggle(SettingsPage, "Hide Username (watermark)", false, 2, function(v, si
     if silent then return end
     pushLog("Watermark username: " .. (v and "@ellieabaddon" or "@" .. LocalPlayer.Name), "info")
 end, "HideUsername")
+createToggle(SettingsPage, "Bind Island", true, 3, function(v, silent)
+    State.BindIsland = v
+    refreshIsland()
+    if silent then return end
+    notify("Bind Island: " .. (v and "ON" or "OFF"))
+end, "BindIsland")
 
-createSection(SettingsPage, "Server", 3)
-createButton(SettingsPage, "Server Hop", 4, serverHop)
-createButton(SettingsPage, "Rejoin", 5, rejoin)
+createSection(SettingsPage, "Keybinds", 4)
+do
+    local info = glassRow(SettingsPage, 5, 54)
+    local t = new("TextLabel", {
+        Size = UDim2.new(1, -28, 1, 0), Position = UDim2.fromOffset(14, 0), BackgroundTransparency = 1,
+        Text = "Middle-click any toggle, then press a key to bind it. Esc clears the bind. Binds work while the menu is closed.",
+        TextColor3 = C.TextDim, TextSize = 11, TextWrapped = true,
+        TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 4, Active = false,
+    }, info)
+    fontReg(t)
+end
+createButton(SettingsPage, "Clear All Binds", 6, clearAllBinds, true)
 
-createSection(SettingsPage, "Config", 6)
-createButton(SettingsPage, "Save Config", 7, saveConfig)
-createButton(SettingsPage, "Load Config", 8, loadConfig)
-createButton(SettingsPage, "Reset Config (defaults)", 9, resetConfig)
-createButton(SettingsPage, "Delete Config File", 10, deleteConfig, true)
+createSection(SettingsPage, "Server", 7)
+createButton(SettingsPage, "Server Hop", 8, serverHop)
+createButton(SettingsPage, "Rejoin", 9, rejoin)
+
+createSection(SettingsPage, "Config", 10)
+createButton(SettingsPage, "Save Config", 11, saveConfig)
+createButton(SettingsPage, "Load Config", 12, loadConfig)
+createButton(SettingsPage, "Reset Config (defaults)", 13, resetConfig)
+createButton(SettingsPage, "Delete Config File", 14, deleteConfig, true)
 
 -- ==================== ESP ====================
 local ESPFolder = new("Folder", { Name = "AbaddonESP" }, ScreenGui)
@@ -1816,6 +2054,7 @@ local openToken = 0
 
 local function setOpen(open)
     State.Open = open
+    if not open then cancelBinding() end
     openToken = openToken + 1
     local myToken = openToken
     pushLog("Menu " .. (open and "opened" or "closed"), "info")
