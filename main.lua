@@ -18,6 +18,8 @@ _G.ASC_MainLoop = nil
 
 local KEY_TOGGLE = Enum.KeyCode.RightShift
 local SPIN_SPEED = 720
+local CONFIG_FILE = "Abaddon_config.json"
+local SCRIPT_START = tick()
 
 local C = {
     Bg          = Color3.fromRGB(8,   8,   10),
@@ -59,8 +61,15 @@ local State = {
     FlySpeed       = 60,
     AntiFling      = false,
     CameraFOV      = 70,
+    ClockTime      = 14,
+    Hoodwink       = false,
     HideUsername   = false,
 }
+
+local DEFAULT_STATE = {}
+for k, v in pairs(State) do DEFAULT_STATE[k] = v end
+
+local widgetRegistry = {}
 
 local VERDANA
 pcall(function() VERDANA = Font.fromName("Verdana") end)
@@ -453,32 +462,98 @@ local function pushLog(text, kind)
     end)
 end
 
+-- ==================== WATERMARK (v2) ====================
 local Watermark = Instance.new("Frame")
-Watermark.Size = UDim2.new(0, 420, 0, 22)
-Watermark.Position = UDim2.new(0.5, 0, 1, -30)
+Watermark.Name = "AbaddonWatermark"
+Watermark.AutomaticSize = Enum.AutomaticSize.X
+Watermark.Size = UDim2.new(0, 0, 0, 26)
+Watermark.Position = UDim2.new(0.5, 0, 1, -40)
 Watermark.AnchorPoint = Vector2.new(0.5, 1)
 Watermark.BackgroundColor3 = C.PanelDark
-Watermark.BackgroundTransparency = 0.35
+Watermark.BackgroundTransparency = 0.2
 Watermark.BorderSizePixel = 0
-Watermark.ZIndex = 250
+Watermark.ZIndex = 260
 Watermark.Parent = ScreenGui
-Instance.new("UICorner", Watermark).CornerRadius = UDim.new(0, 4)
+Instance.new("UICorner", Watermark).CornerRadius = UDim.new(0, 8)
 local wmStroke = Instance.new("UIStroke", Watermark)
 wmStroke.Color = C.Border
-wmStroke.Transparency = 0.5
+wmStroke.Transparency = 0.4
 wmStroke.Thickness = 1
 
-local WmLabel = Instance.new("TextLabel", Watermark)
-WmLabel.Size = UDim2.new(1, -12, 1, 0)
-WmLabel.Position = UDim2.new(0, 6, 0, 0)
-WmLabel.BackgroundTransparency = 1
-WmLabel.RichText = true
-WmLabel.TextColor3 = C.Text
-WmLabel.TextSize = 11
-WmLabel.TextXAlignment = Enum.TextXAlignment.Center
-WmLabel.ZIndex = 251
-WmLabel.Active = false
-applyFont(WmLabel)
+local wmTopGlow = Instance.new("Frame", Watermark)
+wmTopGlow.Size = UDim2.new(1, -16, 0, 1)
+wmTopGlow.Position = UDim2.new(0, 8, 0, 0)
+wmTopGlow.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+wmTopGlow.BackgroundTransparency = 0.85
+wmTopGlow.BorderSizePixel = 0
+wmTopGlow.ZIndex = 261
+
+local wmPad = Instance.new("UIPadding", Watermark)
+wmPad.PaddingLeft = UDim.new(0, 12)
+wmPad.PaddingRight = UDim.new(0, 12)
+wmPad.PaddingTop = UDim.new(0, 4)
+wmPad.PaddingBottom = UDim.new(0, 4)
+
+local wmLayout = Instance.new("UIListLayout", Watermark)
+wmLayout.FillDirection = Enum.FillDirection.Horizontal
+wmLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+wmLayout.SortOrder = Enum.SortOrder.LayoutOrder
+wmLayout.Padding = UDim.new(0, 8)
+
+local wmDot = Instance.new("Frame", Watermark)
+wmDot.Size = UDim2.new(0, 6, 0, 6)
+wmDot.BackgroundColor3 = C.Green
+wmDot.BorderSizePixel = 0
+wmDot.LayoutOrder = 1
+Instance.new("UICorner", wmDot).CornerRadius = UDim.new(1, 0)
+
+task.spawn(function()
+    while wmDot.Parent do
+        local t1 = TweenService:Create(wmDot, TweenInfo.new(1.1, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {BackgroundTransparency = 0.65})
+        t1:Play() t1.Completed:Wait()
+        if not wmDot.Parent then break end
+        local t2 = TweenService:Create(wmDot, TweenInfo.new(1.1, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {BackgroundTransparency = 0})
+        t2:Play() t2.Completed:Wait()
+    end
+end)
+
+local function wmLabel(order, text, color)
+    local lbl = Instance.new("TextLabel", Watermark)
+    lbl.AutomaticSize = Enum.AutomaticSize.X
+    lbl.Size = UDim2.new(0, 0, 1, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.Text = text
+    lbl.TextColor3 = color or C.Text
+    lbl.TextSize = 11
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.LayoutOrder = order
+    lbl.Active = false
+    applyFont(lbl)
+    return lbl
+end
+
+local function wmDiv(order)
+    local d = Instance.new("Frame", Watermark)
+    d.Size = UDim2.new(0, 1, 0, 10)
+    d.BackgroundColor3 = C.BorderSoft
+    d.BorderSizePixel = 0
+    d.LayoutOrder = order
+    return d
+end
+
+local wmBrand  = wmLabel(2, "abaddon", C.Text)
+local wmD1     = wmDiv(3)
+local wmUser   = wmLabel(4, "@" .. LocalPlayer.Name, C.TextDim)
+local wmD2     = wmDiv(5)
+local wmFps    = wmLabel(6, "0 FPS", C.Green)
+local wmD3     = wmDiv(7)
+local wmPing   = wmLabel(8, "0 ms", C.Green)
+local wmD4     = wmDiv(9)
+local wmTime   = wmLabel(10, "00:00:00", C.TextDim)
+local wmD5     = wmDiv(11)
+local wmUptime = wmLabel(12, "0s", C.TextFaint)
+local wmD6     = wmDiv(13)
+local wmPlrs   = wmLabel(14, "1 plr", C.TextDim)
 
 local fpsCounter, fpsTime, currentFps = 0, 0, 0
 RunService.RenderStepped:Connect(function(dt)
@@ -491,33 +566,80 @@ RunService.RenderStepped:Connect(function(dt)
     end
 end)
 
-local function fpsColorHex(fps)
-    if fps >= 50 then return "rgb(150, 210, 165)" end
-    if fps >= 30 then return "rgb(220, 180, 100)" end
-    return "rgb(220, 95, 95)"
+local function fpsColor(fps)
+    if fps >= 50 then return C.Green end
+    if fps >= 30 then return C.Yellow end
+    return C.Red
 end
 
-local function pingColorHex(ping)
-    if ping <= 80 then return "rgb(150, 210, 165)" end
-    if ping <= 150 then return "rgb(220, 180, 100)" end
-    return "rgb(220, 95, 95)"
+local function pingColor(ping)
+    if ping <= 80 then return C.Green end
+    if ping <= 150 then return C.Yellow end
+    return C.Red
+end
+
+local function formatUptime(sec)
+    sec = math.floor(sec)
+    local h = math.floor(sec / 3600)
+    local m = math.floor((sec % 3600) / 60)
+    local s = sec % 60
+    if h > 0 then return string.format("%dh %02dm", h, m) end
+    if m > 0 then return string.format("%dm %02ds", m, s) end
+    return string.format("%ds", s)
 end
 
 task.spawn(function()
-    while ScreenGui.Parent do
+    while Watermark.Parent do
         local ok, ping = pcall(function()
             return math.floor(LocalPlayer:GetNetworkPing() * 1000)
         end)
         if not ok then ping = 0 end
+
         local name = State.HideUsername and "@ellieabaddon" or ("@" .. LocalPlayer.Name)
-        WmLabel.Text = string.format(
-            '<font color="rgb(230,230,235)">abaddon</font> <font color="rgb(90,90,100)">|</font> <font color="rgb(230,230,235)">%s</font> <font color="rgb(90,90,100)">|</font> <font color="%s">FPS %d</font> <font color="rgb(90,90,100)">|</font> <font color="%s">PING %d</font>',
-            name, fpsColorHex(currentFps), currentFps, pingColorHex(ping), ping
-        )
+        wmUser.Text = name
+        wmFps.Text = tostring(currentFps) .. " FPS"
+        wmFps.TextColor3 = fpsColor(currentFps)
+        wmPing.Text = tostring(ping) .. " ms"
+        wmPing.TextColor3 = pingColor(ping)
+        wmTime.Text = os.date("%H:%M:%S")
+        wmUptime.Text = "up " .. formatUptime(tick() - SCRIPT_START)
+        local cnt = #Players:GetPlayers()
+        wmPlrs.Text = tostring(cnt) .. (cnt == 1 and " player" or " players")
+
         task.wait(0.25)
     end
 end)
 
+-- ==================== HOODWINK ====================
+local hoodwinkImg = nil
+local function setHoodwink(on)
+    State.Hoodwink = on
+    if on then
+        if hoodwinkImg then return end
+        local img = Instance.new("ImageLabel")
+        img.Name = "AbaddonHoodwink"
+        img.Size = UDim2.new(0, 200, 0, 200)
+        img.Position = UDim2.new(1, -20, 0, 20)
+        img.AnchorPoint = Vector2.new(1, 0)
+        img.BackgroundTransparency = 1
+        img.Image = "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQ8uNn4Rwil6tRzyFXmlRUCOnCAnUlw33veEbK-auHw11oiZKgMxqOjrA2C&s=10"
+        img.ZIndex = 2147483600
+        img.Parent = ScreenGui
+
+        img.ImageTransparency = 1
+        TweenService:Create(img, TweenInfo.new(0.35, Enum.EasingStyle.Quint), {ImageTransparency = 0}):Play()
+        hoodwinkImg = img
+    else
+        if hoodwinkImg then
+            local old = hoodwinkImg
+            hoodwinkImg = nil
+            TweenService:Create(old, TweenInfo.new(0.3, Enum.EasingStyle.Quart), {ImageTransparency = 1}):Play()
+            task.delay(0.32, function() old:Destroy() end)
+        end
+    end
+end
+
+-- ==================== TAB SYSTEM ====================
 local Tabs, Pages = {}, {}
 
 local function setActiveTab(name)
@@ -577,7 +699,6 @@ local function createTab(name, order)
     page.BorderSizePixel = 0
     page.Visible = false
     page.ZIndex = 102
-
     page.ScrollingDirection = Enum.ScrollingDirection.Y
     page.ScrollingEnabled = true
     page.ElasticBehavior = Enum.ElasticBehavior.WhenScrollable
@@ -621,7 +742,7 @@ local function makeRow(parent, order, h)
     return row
 end
 
-local function createToggle(parent, label, default, order, callback)
+local function createToggle(parent, label, default, order, callback, stateKey)
     local row = makeRow(parent, order)
     local lbl = Instance.new("TextLabel", row)
     lbl.Size = UDim2.new(1, -80, 1, 0)
@@ -651,7 +772,7 @@ local function createToggle(parent, label, default, order, callback)
     Instance.new("UICorner", knob).CornerRadius = UDim.new(1, 0)
 
     local isOn = default
-    local function update(v)
+    local function update(v, silent)
         isOn = v
         TweenService:Create(toggle, TweenInfo.new(0.18, Enum.EasingStyle.Quart), {
             BackgroundColor3 = v and C.Accent or C.ToggleOff,
@@ -660,7 +781,7 @@ local function createToggle(parent, label, default, order, callback)
             Position = v and UDim2.new(1, -16, 0.5, -7) or UDim2.new(0, 2, 0.5, -7),
             BackgroundColor3 = v and C.PanelDark or Color3.fromRGB(180, 180, 185),
         }):Play()
-        if callback then callback(v) end
+        if callback then callback(v, silent) end
     end
 
     local hit = Instance.new("TextButton", row)
@@ -671,10 +792,15 @@ local function createToggle(parent, label, default, order, callback)
     hit.ZIndex = 104
     hit.MouseButton1Click:Connect(function() update(not isOn) end)
 
-    return { Set = update, Get = function() return isOn end }
+    local widget = {
+        Set = function(v) update(v, true) end,
+        Get = function() return isOn end,
+    }
+    if stateKey then widgetRegistry[stateKey] = widget end
+    return widget
 end
 
-local function createInput(parent, label, default, order, callback)
+local function createInput(parent, label, default, order, callback, stateKey)
     local row = makeRow(parent, order)
     local lbl = Instance.new("TextLabel", row)
     lbl.Size = UDim2.new(1, -150, 1, 0)
@@ -710,7 +836,15 @@ local function createInput(parent, label, default, order, callback)
         else box.Text = tostring(default) end
     end)
 
-    return box
+    local widget = {
+        Set = function(v)
+            box.Text = tostring(v)
+            callback(v)
+        end,
+        Get = function() return tonumber(box.Text) or default end,
+    }
+    if stateKey then widgetRegistry[stateKey] = widget end
+    return widget
 end
 
 local function createButton(parent, label, order, callback)
@@ -796,7 +930,7 @@ local function createTextAction(parent, label, placeholder, order, callback)
     return box
 end
 
-local function createSlider(parent, label, min, max, default, order, callback)
+local function createSlider(parent, label, min, max, default, order, callback, onRelease, stateKey)
     min = min or 0
     max = max or 100
     default = math.clamp(default or min, min, max)
@@ -856,19 +990,19 @@ local function createSlider(parent, label, min, max, default, order, callback)
     local current = default
     local dragging = false
 
-    local function setValue(v)
+    local function setValue(v, silent)
         v = math.clamp(math.floor(v + 0.5), min, max)
         current = v
         local rel = (v - min) / (max - min)
         fill.Size = UDim2.new(rel, 0, 1, 0)
         knob.Position = UDim2.new(0, 16 + rel * (track.AbsoluteSize.X), 0, 36)
         valLbl.Text = tostring(v)
-        if callback then callback(v) end
+        if callback then callback(v, silent) end
     end
 
     local function updateFromX(x)
         local rel = math.clamp((x - track.AbsolutePosition.X) / math.max(1, track.AbsoluteSize.X), 0, 1)
-        setValue(min + (max - min) * rel)
+        setValue(min + (max - min) * rel, false)
     end
 
     track:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
@@ -900,22 +1034,29 @@ local function createSlider(parent, label, min, max, default, order, callback)
     UserInputService.InputEnded:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1
         or input.UserInputType == Enum.UserInputType.Touch then
-            dragging = false
+            if dragging then
+                dragging = false
+                if onRelease then onRelease(current) end
+            end
         end
     end)
 
-    return {
+    local widget = {
         Set = function(v)
-            setValue(v)
+            setValue(v, true)
+            if onRelease then onRelease(current) end
         end,
         Get = function() return current end,
     }
+    if stateKey then widgetRegistry[stateKey] = widget end
+    return widget
 end
 
 local VisualPage = createTab("Visual", 1)
 local MainPage   = createTab("Main",   2)
 local PlayerPage = createTab("Player", 3)
 local FunPage    = createTab("Fun",    4)
+local ConfigPage = createTab("Config", 5)
 
 setActiveTab("Visual")
 
@@ -1072,7 +1213,7 @@ local function stripOneTexture(obj)
     end
 end
 
-local function setNoTextures(on)
+local function setNoTextures(on, silent)
     State.NoTextures = on
 
     if on then
@@ -1096,7 +1237,9 @@ local function setNoTextures(on)
         texRestore = {}
     end
 
-    pushLog("No Textures: " .. (on and "включены" or "выключены"), "info")
+    if not silent then
+        pushLog("No Textures: " .. (on and "включены" or "выключены"), "info")
+    end
 end
 
 local afkConn
@@ -1240,12 +1383,14 @@ local function setSpin(on)
     end)
 end
 
-local function setCameraFOV(value)
+local function setCameraFOV(value, silent)
     State.CameraFOV = value
     if cam then
         cam.FieldOfView = value
     end
-    pushLog("Camera FOV: " .. tostring(value), "info")
+    if not silent then
+        pushLog("Camera FOV: " .. tostring(value), "info")
+    end
 end
 
 local flyBodyVel, flyBodyGyro, flyConn
@@ -1370,58 +1515,149 @@ local function rejoin()
     TeleportService:Teleport(game.PlaceId, LocalPlayer)
 end
 
-createToggle(VisualPage, "ESP Survivors", false, 1, function(v)
+-- ==================== CONFIG SYSTEM ====================
+local function saveConfig()
+    if not writefile then
+        pushLog("Executor не поддерживает writefile", "error")
+        return
+    end
+    local data = {}
+    for k, v in pairs(State) do
+        if type(v) ~= "function" and type(v) ~= "table" then
+            data[k] = v
+        end
+    end
+    local ok, err = pcall(function()
+        writefile(CONFIG_FILE, HttpService:JSONEncode(data))
+    end)
+    if ok then
+        pushLog("Конфиг сохранён (" .. CONFIG_FILE .. ")", "success")
+    else
+        pushLog("Ошибка сохранения: " .. tostring(err), "error")
+    end
+end
+
+local function applyConfigData(data, silent)
+    for key, w in pairs(widgetRegistry) do
+        if data[key] ~= nil then
+            pcall(function() w.Set(data[key]) end)
+            State[key] = data[key]
+        end
+    end
+    if data.HideUsername ~= nil then State.HideUsername = data.HideUsername end
+    if not silent then
+        pushLog("Конфиг применён", "success")
+    end
+end
+
+local function loadConfig()
+    if not readfile or not isfile then
+        pushLog("Executor не поддерживает readfile", "error")
+        return
+    end
+    if not isfile(CONFIG_FILE) then
+        pushLog("Конфиг не найден", "warn")
+        return
+    end
+    local ok, data = pcall(function()
+        return HttpService:JSONDecode(readfile(CONFIG_FILE))
+    end)
+    if not ok or type(data) ~= "table" then
+        pushLog("Ошибка чтения конфига", "error")
+        return
+    end
+    applyConfigData(data, false)
+    pushLog("Конфиг загружен", "success")
+end
+
+local function resetConfig()
+    applyConfigData(DEFAULT_STATE, true)
+    pushLog("Настройки сброшены к дефолту", "success")
+    notify("Config reset")
+end
+
+local function deleteConfig()
+    if not delfile then
+        pushLog("Executor не поддерживает delfile", "error")
+        return
+    end
+    pcall(function() delfile(CONFIG_FILE) end)
+    pushLog("Файл конфига удалён", "info")
+end
+
+-- ==================== VISUAL PAGE ====================
+createToggle(VisualPage, "ESP Survivors", false, 1, function(v, silent)
     State.ESP_Survivors = v
+    if silent then return end
     notify("Survivors ESP: " .. (v and "ON" or "OFF"))
     pushLog("ESP Survivors: " .. (v and "включён" or "выключен"), "info")
-end)
-createToggle(VisualPage, "ESP Killer", false, 2, function(v)
+end, "ESP_Survivors")
+
+createToggle(VisualPage, "ESP Killer", false, 2, function(v, silent)
     State.ESP_Killer = v
+    if silent then return end
     notify("Killer ESP: " .. (v and "ON" or "OFF"))
     pushLog("ESP Killer: " .. (v and "включён" or "выключен"), "info")
-end)
-createToggle(VisualPage, "ESP Generators", false, 3, function(v)
+end, "ESP_Killer")
+
+createToggle(VisualPage, "ESP Generators", false, 3, function(v, silent)
     State.ESP_Generators = v
+    if silent then return end
     notify("Generators ESP: " .. (v and "ON" or "OFF"))
     pushLog("ESP Generators: " .. (v and "включён" or "выключен"), "info")
-end)
-createToggle(VisualPage, "Fullbright", false, 4, function(v)
+end, "ESP_Generators")
+
+createToggle(VisualPage, "Fullbright", false, 4, function(v, silent)
     State.Fullbright = v
     setFullbright(v)
+    if silent then return end
     notify("Fullbright: " .. (v and "ON" or "OFF"))
     pushLog("Fullbright: " .. (v and "включён" or "выключен"), "info")
-end)
-createToggle(VisualPage, "No Shadows", false, 5, function(v)
+end, "Fullbright")
+
+createToggle(VisualPage, "No Shadows", false, 5, function(v, silent)
     setNoShadows(v)
+    if silent then return end
     notify("No Shadows: " .. (v and "ON" or "OFF"))
     pushLog("No Shadows: " .. (v and "включены" or "выключены"), "info")
-end)
-createToggle(VisualPage, "No Textures", false, 6, function(v)
-    setNoTextures(v)
-    notify("No Textures: " .. (v and "ON" or "OFF"))
-end)
+end, "NoShadows")
 
-createToggle(MainPage, "Auto Hit Perfect Skillcheck", false, 1, function(v)
+createToggle(VisualPage, "No Textures", false, 6, function(v, silent)
+    setNoTextures(v, silent)
+    if silent then return end
+    notify("No Textures: " .. (v and "ON" or "OFF"))
+end, "NoTextures")
+
+-- ==================== MAIN PAGE ====================
+createToggle(MainPage, "Auto Hit Perfect Skillcheck", false, 1, function(v, silent)
     State.AutoSkillCheck = v
+    if silent then return end
     notify("Auto Skillcheck: " .. (v and "ON" or "OFF"))
     pushLog("Auto Skillcheck: " .. (v and "включён" or "выключен"), "info")
-end)
-createToggle(MainPage, "Anti-AFK", false, 2, function(v)
+end, "AutoSkillCheck")
+
+createToggle(MainPage, "Anti-AFK", false, 2, function(v, silent)
     State.AntiAFK = v
     setAntiAFK(v)
+    if silent then return end
     notify("Anti-AFK: " .. (v and "ON" or "OFF"))
     pushLog("Anti-AFK: " .. (v and "включён" or "выключен"), "info")
-end)
-createToggle(MainPage, "Anti-Fling", false, 3, function(v)
+end, "AntiAFK")
+
+createToggle(MainPage, "Anti-Fling", false, 3, function(v, silent)
     setAntiFling(v)
+    if silent then return end
     notify("Anti-Fling: " .. (v and "ON" or "OFF"))
     pushLog("Anti-Fling: " .. (v and "включён" or "выключен"), "info")
-end)
-createToggle(MainPage, "Hide Username (watermark)", false, 4, function(v)
-    State.HideUsername = v
-    pushLog("Watermark username: " .. (v and "@ellieabaddon" or "@" .. LocalPlayer.Name), "info")
-end)
+end, "AntiFling")
 
+createToggle(MainPage, "Hide Username (watermark)", false, 4, function(v, silent)
+    State.HideUsername = v
+    if silent then return end
+    pushLog("Watermark username: " .. (v and "@ellieabaddon" or "@" .. LocalPlayer.Name), "info")
+end, "HideUsername")
+
+-- ==================== PLAYER PAGE ====================
 createInput(PlayerPage, "WalkSpeed", 16, 1, function(v)
     State.WalkSpeed = v
     local char = LocalPlayer.Character
@@ -1429,7 +1665,8 @@ createInput(PlayerPage, "WalkSpeed", 16, 1, function(v)
     if hum then hum.WalkSpeed = v end
     notify("WalkSpeed: " .. tostring(v))
     pushLog("WalkSpeed изменён на " .. tostring(v), "info")
-end)
+end, "WalkSpeed")
+
 createInput(PlayerPage, "Hip Height", 2, 2, function(v)
     State.HipHeight = v
     local char = LocalPlayer.Character
@@ -1437,55 +1674,105 @@ createInput(PlayerPage, "Hip Height", 2, 2, function(v)
     if hum then hum.HipHeight = v end
     notify("HipHeight: " .. tostring(v))
     pushLog("HipHeight изменён на " .. tostring(v), "info")
-end)
-createToggle(PlayerPage, "Noclip", false, 3, function(v)
+end, "HipHeight")
+
+createToggle(PlayerPage, "Noclip", false, 3, function(v, silent)
     setNoclip(v)
+    if silent then return end
     notify("Noclip: " .. (v and "ON" or "OFF"))
     pushLog("Noclip: " .. (v and "включён" or "выключен"), "info")
-end)
-createToggle(PlayerPage, "TP Tool (ЛКМ — телепорт)", false, 4, function(v)
+end, "Noclip")
+
+createToggle(PlayerPage, "TP Tool (ЛКМ — телепорт)", false, 4, function(v, silent)
     setTPTool(v)
+    if silent then return end
     notify("TP Tool: " .. (v and "ON" or "OFF"))
     pushLog("TP Tool: " .. (v and "включён" or "выключен"), "info")
-end)
-createToggle(PlayerPage, "Fly (WASD+Space/Ctrl)", false, 5, function(v)
+end, "TPTool")
+
+createToggle(PlayerPage, "Fly (WASD+Space/Ctrl)", false, 5, function(v, silent)
     setFly(v)
+    if silent then return end
     notify("Fly: " .. (v and "ON" or "OFF"))
     pushLog("Fly: " .. (v and "включён" or "выключен"), "info")
-end)
+end, "Fly")
+
 createInput(PlayerPage, "Fly Speed", 60, 6, function(v)
     State.FlySpeed = v
     notify("Fly Speed: " .. tostring(v))
     pushLog("Fly Speed: " .. tostring(v), "info")
-end)
+end, "FlySpeed")
+
 createTextAction(PlayerPage, "Goto Player", "nickname", 7, function(name)
     gotoPlayer(name)
 end)
+
 createButton(PlayerPage, "Server Hop", 8, function()
     serverHop()
 end)
+
 createButton(PlayerPage, "Rejoin", 9, function()
     rejoin()
 end)
 
-createToggle(FunPage, "Back Walk", false, 1, function(v)
+-- ==================== FUN PAGE ====================
+createToggle(FunPage, "Back Walk", false, 1, function(v, silent)
     setBackWalk(v)
+    if silent then return end
     notify("Back Walk: " .. (v and "ON" or "OFF"))
     pushLog("Back Walk: " .. (v and "включён" or "выключен"), "info")
-end)
-createToggle(FunPage, "Spin", false, 2, function(v)
+end, "BackWalk")
+
+createToggle(FunPage, "Spin", false, 2, function(v, silent)
     setSpin(v)
+    if silent then return end
     notify("Spin: " .. (v and "ON" or "OFF"))
     pushLog("Spin: " .. (v and "включён" or "выключен"), "info")
+end, "Spin")
+
+createSlider(FunPage, "Camera FOV", 60, 220, 70, 3,
+    function(v, silent)
+        setCameraFOV(v, silent)
+    end,
+    function(v)
+        pushLog("Camera FOV: " .. tostring(v), "info")
+    end,
+    "CameraFOV"
+)
+
+createSlider(FunPage, "Time (ClockTime 0-24)", 0, 24, 14, 4,
+    function(v, silent)
+        State.ClockTime = v
+        Lighting.ClockTime = math.clamp(v, 0, 24)
+    end,
+    function(v)
+        pushLog("ClockTime: " .. tostring(v), "info")
+    end,
+    "ClockTime"
+)
+
+createToggle(FunPage, "Hoodwink", false, 5, function(v, silent)
+    setHoodwink(v)
+    if silent then return end
+    notify("Hoodwink: " .. (v and "ON" or "OFF"))
+    pushLog("Hoodwink: " .. (v and "включён" or "выключен"), "info")
+end, "Hoodwink")
+
+-- ==================== CONFIG PAGE ====================
+createButton(ConfigPage, "Save Config", 1, function()
+    saveConfig()
 end)
-createSlider(FunPage, "Camera FOV", 60, 220, 70, 3, function(v)
-    setCameraFOV(v)
+createButton(ConfigPage, "Load Config", 2, function()
+    loadConfig()
 end)
-createSlider(FunPage, "Time (ClockTime 0-24)", 0, 24, 14, 4, function(v)
-    Lighting.ClockTime = math.clamp(v, 0, 24)
-    pushLog("ClockTime: " .. tostring(v), "info")
+createButton(ConfigPage, "Reset Config (defaults)", 3, function()
+    resetConfig()
+end)
+createButton(ConfigPage, "Delete Config File", 4, function()
+    deleteConfig()
 end)
 
+-- ==================== ESP ====================
 local ESPFolder = Instance.new("Folder")
 ESPFolder.Name = "AbaddonESP"
 ESPFolder.Parent = ScreenGui
@@ -1591,6 +1878,7 @@ task.spawn(function()
     end
 end)
 
+-- ==================== AUTO SKILLCHECK ====================
 local TouchID         = 8822
 local ActionPath      = "Survivor-mob.Controls.action.check"
 local isProcessingHit = false
@@ -1664,6 +1952,7 @@ _G.ASC_MainLoop = RunService.Heartbeat:Connect(function()
     end
 end)
 
+-- ==================== OPEN / CLOSE ====================
 local openToken = 0
 
 local function setOpen(open)
@@ -1753,6 +2042,7 @@ UserInputService.InputChanged:Connect(function(input, gpe)
     end
 end)
 
+-- ==================== WELCOME ====================
 local function showWelcome()
     local popup = Instance.new("Frame", ScreenGui)
     popup.Size = UDim2.new(0, 320, 0, 48)
@@ -1796,6 +2086,7 @@ local function showWelcome()
     popup:Destroy()
 end
 
+-- ==================== CHARACTER HOOKS ====================
 LocalPlayer.CharacterAdded:Connect(function(char)
     pushLog("Персонаж загружен", "info")
     task.wait(0.4)
@@ -1821,9 +2112,17 @@ LocalPlayer.CharacterRemoving:Connect(function()
     pushLog("Персонаж выгружается", "warn")
 end)
 
+-- ==================== BOOT ====================
 task.spawn(function()
     local ok, err = pcall(showWelcome)
     if not ok then pushLog("Ошибка при показе welcome: " .. tostring(err), "error") end
+end)
+
+task.spawn(function()
+    if readfile and isfile and isfile(CONFIG_FILE) then
+        task.wait(1)
+        pcall(loadConfig)
+    end
 end)
 
 notify("Abaddon loaded · RightShift")
