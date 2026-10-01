@@ -16,29 +16,45 @@ if _G.AbaddonGui then pcall(function() _G.AbaddonGui:Destroy() end) end
 if _G.ASC_MainLoop then pcall(function() _G.ASC_MainLoop:Disconnect() end) end
 _G.ASC_MainLoop = nil
 
-local KEY_TOGGLE = Enum.KeyCode.RightShift
-local SPIN_SPEED = 720
+local KEY_TOGGLE  = Enum.KeyCode.RightShift
+local SPIN_SPEED  = 720
 local CONFIG_FILE = "Abaddon_config.json"
 local SCRIPT_START = tick()
 
+-- ==================== PERSISTENT PARENT ====================
+local function getPersistentParent()
+    if gethui then
+        local ok, hui = pcall(gethui)
+        if ok and hui then return hui end
+    end
+    if get_hidden_gui then
+        local ok, hui = pcall(get_hidden_gui)
+        if ok and hui then return hui end
+    end
+    local ok, coreGui = pcall(function() return game:GetService("CoreGui") end)
+    if ok and coreGui then return coreGui end
+    return LocalPlayer:WaitForChild("PlayerGui")
+end
+
+-- Строгая, приглушённая палитра
 local C = {
-    Bg          = Color3.fromRGB(8,   8,   10),
-    Panel       = Color3.fromRGB(14,  14,  17),
-    PanelSoft   = Color3.fromRGB(22,  22,  26),
-    PanelDark   = Color3.fromRGB(10,  10,  12),
-    Border      = Color3.fromRGB(48,  48,  55),
-    BorderSoft  = Color3.fromRGB(34,  34,  40),
-    Text        = Color3.fromRGB(230, 230, 235),
-    TextDim     = Color3.fromRGB(135, 135, 145),
-    TextFaint   = Color3.fromRGB(90,  90,  100),
-    Accent      = Color3.fromRGB(226, 226, 232),
-    ToggleOff   = Color3.fromRGB(42,  42,  48),
-    Green       = Color3.fromRGB(150, 210, 165),
-    Yellow      = Color3.fromRGB(220, 180, 100),
-    Red         = Color3.fromRGB(220, 95,  95),
-    Survivor    = Color3.fromRGB(155, 195, 235),
-    Killer      = Color3.fromRGB(220, 95,  95),
-    Generator   = Color3.fromRGB(150, 215, 165),
+    Bg          = Color3.fromRGB(6,   6,   7),
+    Panel       = Color3.fromRGB(11,  11,  12),
+    PanelSoft   = Color3.fromRGB(16,  16,  18),
+    PanelDark   = Color3.fromRGB(8,   8,   9),
+    Border      = Color3.fromRGB(34,  34,  38),
+    BorderSoft  = Color3.fromRGB(24,  24,  27),
+    Text        = Color3.fromRGB(220, 220, 224),
+    TextDim     = Color3.fromRGB(120, 120, 126),
+    TextFaint   = Color3.fromRGB(72,  72,  78),
+    Accent      = Color3.fromRGB(200, 200, 205),
+    ToggleOff   = Color3.fromRGB(28,  28,  32),
+    Green       = Color3.fromRGB(140, 195, 155),
+    Yellow      = Color3.fromRGB(200, 165, 95),
+    Red         = Color3.fromRGB(200, 85,  85),
+    Survivor    = Color3.fromRGB(140, 180, 220),
+    Killer      = Color3.fromRGB(200, 85,  85),
+    Generator   = Color3.fromRGB(140, 200, 155),
 }
 
 local State = {
@@ -52,7 +68,7 @@ local State = {
     AutoSkillCheck = false,
     AntiAFK        = false,
     WalkSpeed      = 16,
-    HipHeight      = 2,
+    HipHeight      = 0,    -- ФИКС: было 2, из-за этого персонаж висел в воздухе
     Noclip         = false,
     TPTool         = false,
     BackWalk       = false,
@@ -91,8 +107,47 @@ ScreenGui.ResetOnSpawn = false
 ScreenGui.IgnoreGuiInset = true
 ScreenGui.DisplayOrder = 2147483647
 ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-ScreenGui.Parent = PlayerGui
+ScreenGui.Parent = getPersistentParent()
 _G.AbaddonGui = ScreenGui
+
+-- ==================== PERSISTENCE WATCHER ====================
+task.spawn(function()
+    while true do
+        task.wait(0.5)
+        local ok = pcall(function()
+            if not ScreenGui or not ScreenGui.Parent then return end
+        end)
+        if not ok then return end
+        if ScreenGui.Parent == nil then
+            local parent = getPersistentParent()
+            if parent then
+                pcall(function() ScreenGui.Parent = parent end)
+            end
+        end
+        if Blur and Blur.Parent == nil then
+            pcall(function() Blur.Parent = Lighting end)
+        end
+    end
+end)
+
+-- ==================== URL RESOLVER ====================
+local function resolveImageUrl(url)
+    if writefile and getcustomasset then
+        local ok, path = pcall(function()
+            local filename = "abaddon_hoodwink.png"
+            if isfile and isfile(filename) then
+                return getcustomasset(filename)
+            end
+            local body = game:HttpGet(url, true)
+            writefile(filename, body)
+            return getcustomasset(filename)
+        end)
+        if ok and type(path) == "string" and path ~= "" then
+            return path
+        end
+    end
+    return url
+end
 
 local Overlay = Instance.new("Frame")
 Overlay.Size = UDim2.new(1, 0, 1, 0)
@@ -118,8 +173,8 @@ local function makeNode()
     local dot = Instance.new("Frame")
     dot.Size = UDim2.new(0, 2, 0, 2)
     dot.AnchorPoint = Vector2.new(0.5, 0.5)
-    dot.BackgroundColor3 = Color3.fromRGB(230, 230, 235)
-    dot.BackgroundTransparency = math.random(20, 60) / 100
+    dot.BackgroundColor3 = Color3.fromRGB(220, 220, 224)
+    dot.BackgroundTransparency = math.random(30, 65) / 100
     dot.BorderSizePixel = 0
     dot.ZIndex = 12
     dot.Parent = Grid
@@ -136,7 +191,7 @@ local function getLink(i)
     if not links[i] then
         local f = Instance.new("Frame")
         f.BorderSizePixel = 0
-        f.BackgroundColor3 = Color3.fromRGB(200, 200, 210)
+        f.BackgroundColor3 = Color3.fromRGB(180, 180, 190)
         f.AnchorPoint = Vector2.new(0.5, 0.5)
         f.Visible = false
         f.ZIndex = 11
@@ -149,6 +204,8 @@ end
 local cam = workspace.CurrentCamera
 RunService.RenderStepped:Connect(function(dt)
     if not Grid.Visible then return end
+    if not cam then cam = workspace.CurrentCamera end
+    if not cam then return end
     local vp = cam.ViewportSize
     for _, n in ipairs(nodes) do
         n.x = n.x + n.vx * dt
@@ -171,7 +228,7 @@ RunService.RenderStepped:Connect(function(dt)
                 f.Size = UDim2.new(0, d, 0, 1)
                 f.Position = UDim2.new(0, (a.x + b.x) * 0.5, 0, (a.y + b.y) * 0.5)
                 f.Rotation = math.deg(math.atan2(dy, dx))
-                f.BackgroundTransparency = 0.55 + (1 - d / MAX_LINK) * 0.4
+                f.BackgroundTransparency = 0.65 + (1 - d / MAX_LINK) * 0.3
                 li = li + 1
             end
         end
@@ -181,25 +238,25 @@ end)
 
 local Panel = Instance.new("Frame")
 Panel.Name = "Panel"
-Panel.Size = UDim2.new(0, 640, 0, 430)
+Panel.Size = UDim2.new(0, 620, 0, 420)
 Panel.Position = UDim2.new(0.5, 0, 0.5, 0)
 Panel.AnchorPoint = Vector2.new(0.5, 0.5)
 Panel.BackgroundColor3 = C.Panel
-Panel.BackgroundTransparency = 0.1
+Panel.BackgroundTransparency = 0.06
 Panel.BorderSizePixel = 0
 Panel.Visible = false
 Panel.ClipsDescendants = true
 Panel.ZIndex = 100
 Panel.Parent = ScreenGui
-Instance.new("UICorner", Panel).CornerRadius = UDim.new(0, 10)
+Instance.new("UICorner", Panel).CornerRadius = UDim.new(0, 2)
 
 local pStroke = Instance.new("UIStroke", Panel)
 pStroke.Color = C.Border
-pStroke.Transparency = 0.35
+pStroke.Transparency = 0.25
 pStroke.Thickness = 1
 
 local TopBar = Instance.new("Frame")
-TopBar.Size = UDim2.new(1, 0, 0, 44)
+TopBar.Size = UDim2.new(1, 0, 0, 40)
 TopBar.BackgroundTransparency = 1
 TopBar.ZIndex = 105
 TopBar.Active = true
@@ -207,11 +264,11 @@ TopBar.Parent = Panel
 
 local TopTitle = Instance.new("TextLabel", TopBar)
 TopTitle.Size = UDim2.new(0, 200, 0, 16)
-TopTitle.Position = UDim2.new(0, 18, 0, 14)
+TopTitle.Position = UDim2.new(0, 16, 0, 12)
 TopTitle.BackgroundTransparency = 1
 TopTitle.Text = "ABADDON"
 TopTitle.TextColor3 = C.Text
-TopTitle.TextSize = 13
+TopTitle.TextSize = 12
 TopTitle.TextXAlignment = Enum.TextXAlignment.Left
 TopTitle.Active = false
 TopTitle.ZIndex = 106
@@ -219,11 +276,11 @@ applyFont(TopTitle)
 
 local TopSub = Instance.new("TextLabel", TopBar)
 TopSub.Size = UDim2.new(0, 200, 0, 12)
-TopSub.Position = UDim2.new(0, 118, 0, 15)
+TopSub.Position = UDim2.new(0, 104, 0, 14)
 TopSub.BackgroundTransparency = 1
-TopSub.Text = "@lzteam"
+TopSub.Text = "lzteam"
 TopSub.TextColor3 = C.TextFaint
-TopSub.TextSize = 10
+TopSub.TextSize = 9
 TopSub.TextXAlignment = Enum.TextXAlignment.Left
 TopSub.Active = false
 TopSub.ZIndex = 106
@@ -231,18 +288,18 @@ applyFont(TopSub)
 
 local HDiv = Instance.new("Frame", Panel)
 HDiv.Size = UDim2.new(1, 0, 0, 1)
-HDiv.Position = UDim2.new(0, 0, 0, 44)
+HDiv.Position = UDim2.new(0, 0, 0, 40)
 HDiv.BackgroundColor3 = C.BorderSoft
 HDiv.BorderSizePixel = 0
 HDiv.ZIndex = 105
 
 local CloseBtn = Instance.new("TextButton", TopBar)
 CloseBtn.Size = UDim2.new(0, 24, 0, 24)
-CloseBtn.Position = UDim2.new(1, -32, 0, 10)
+CloseBtn.Position = UDim2.new(1, -30, 0, 8)
 CloseBtn.BackgroundTransparency = 1
 CloseBtn.Text = "×"
 CloseBtn.TextColor3 = C.TextDim
-CloseBtn.TextSize = 18
+CloseBtn.TextSize = 16
 CloseBtn.AutoButtonColor = false
 CloseBtn.ZIndex = 107
 applyFont(CloseBtn)
@@ -254,12 +311,12 @@ CloseBtn.MouseLeave:Connect(function()
     TweenService:Create(CloseBtn, TweenInfo.new(0.15), {TextColor3 = C.TextDim}):Play()
 end)
 
-local SB_W = 172
+local SB_W = 160
 local Sidebar = Instance.new("Frame")
-Sidebar.Size = UDim2.new(0, SB_W, 1, -45)
-Sidebar.Position = UDim2.new(0, 0, 0, 45)
+Sidebar.Size = UDim2.new(0, SB_W, 1, -41)
+Sidebar.Position = UDim2.new(0, 0, 0, 41)
 Sidebar.BackgroundColor3 = C.PanelDark
-Sidebar.BackgroundTransparency = 0.35
+Sidebar.BackgroundTransparency = 0.2
 Sidebar.BorderSizePixel = 0
 Sidebar.ZIndex = 101
 Sidebar.Parent = Panel
@@ -273,7 +330,7 @@ SBDiv.ZIndex = 102
 
 local TabList = Instance.new("Frame", Sidebar)
 TabList.Size = UDim2.new(1, -20, 0, 240)
-TabList.Position = UDim2.new(0, 10, 0, 14)
+TabList.Position = UDim2.new(0, 10, 0, 12)
 TabList.BackgroundTransparency = 1
 TabList.ZIndex = 102
 
@@ -282,38 +339,38 @@ TabLayout.Padding = UDim.new(0, 2)
 TabLayout.SortOrder = Enum.SortOrder.LayoutOrder
 
 local Card = Instance.new("Frame", Sidebar)
-Card.Size = UDim2.new(1, -20, 0, 62)
-Card.Position = UDim2.new(0, 10, 1, -74)
+Card.Size = UDim2.new(1, -20, 0, 56)
+Card.Position = UDim2.new(0, 10, 1, -66)
 Card.BackgroundColor3 = C.PanelSoft
-Card.BackgroundTransparency = 0.4
+Card.BackgroundTransparency = 0.2
 Card.BorderSizePixel = 0
 Card.ZIndex = 102
-Instance.new("UICorner", Card).CornerRadius = UDim.new(0, 8)
+Instance.new("UICorner", Card).CornerRadius = UDim.new(0, 2)
 local cardStroke = Instance.new("UIStroke", Card)
 cardStroke.Color = C.Border
 cardStroke.Transparency = 0.5
 cardStroke.Thickness = 1
 
 local Avatar = Instance.new("ImageLabel", Card)
-Avatar.Size = UDim2.new(0, 42, 0, 42)
-Avatar.Position = UDim2.new(0, 10, 0, 10)
+Avatar.Size = UDim2.new(0, 38, 0, 38)
+Avatar.Position = UDim2.new(0, 9, 0, 9)
 Avatar.BackgroundColor3 = C.PanelDark
 Avatar.BorderSizePixel = 0
 Avatar.Image = "rbxthumb://type=AvatarHeadShot&id=" .. LocalPlayer.UserId .. "&w=150&h=150"
 Avatar.ZIndex = 103
-Instance.new("UICorner", Avatar).CornerRadius = UDim.new(0, 8)
+Instance.new("UICorner", Avatar).CornerRadius = UDim.new(0, 2)
 local avStroke = Instance.new("UIStroke", Avatar)
 avStroke.Color = C.Border
 avStroke.Transparency = 0.4
 avStroke.Thickness = 1
 
 local NameLbl = Instance.new("TextLabel", Card)
-NameLbl.Size = UDim2.new(1, -62, 0, 14)
-NameLbl.Position = UDim2.new(0, 60, 0, 18)
+NameLbl.Size = UDim2.new(1, -58, 0, 14)
+NameLbl.Position = UDim2.new(0, 54, 0, 16)
 NameLbl.BackgroundTransparency = 1
 NameLbl.Text = "@" .. LocalPlayer.Name
 NameLbl.TextColor3 = C.Text
-NameLbl.TextSize = 12
+NameLbl.TextSize = 11
 NameLbl.TextXAlignment = Enum.TextXAlignment.Left
 NameLbl.Active = false
 NameLbl.ZIndex = 103
@@ -321,61 +378,61 @@ applyFont(NameLbl)
 
 local StatusDot = Instance.new("Frame", Card)
 StatusDot.Size = UDim2.new(0, 5, 0, 5)
-StatusDot.Position = UDim2.new(0, 61, 0, 40)
+StatusDot.Position = UDim2.new(0, 55, 0, 36)
 StatusDot.BackgroundColor3 = C.Green
 StatusDot.BorderSizePixel = 0
 StatusDot.ZIndex = 103
 Instance.new("UICorner", StatusDot).CornerRadius = UDim.new(1, 0)
 
 local StatusLbl = Instance.new("TextLabel", Card)
-StatusLbl.Size = UDim2.new(1, -72, 0, 12)
-StatusLbl.Position = UDim2.new(0, 72, 0, 36)
+StatusLbl.Size = UDim2.new(1, -68, 0, 12)
+StatusLbl.Position = UDim2.new(0, 66, 0, 32)
 StatusLbl.BackgroundTransparency = 1
-StatusLbl.Text = "Beta Tester"
-StatusLbl.TextColor3 = C.TextDim
-StatusLbl.TextSize = 10
+StatusLbl.Text = "BETA"
+StatusLbl.TextColor3 = C.TextFaint
+StatusLbl.TextSize = 9
 StatusLbl.TextXAlignment = Enum.TextXAlignment.Left
 StatusLbl.Active = false
 StatusLbl.ZIndex = 103
 applyFont(StatusLbl)
 
 local Content = Instance.new("Frame", Panel)
-Content.Size = UDim2.new(1, -SB_W, 1, -45)
-Content.Position = UDim2.new(0, SB_W, 0, 45)
+Content.Size = UDim2.new(1, -SB_W, 1, -41)
+Content.Position = UDim2.new(0, SB_W, 0, 41)
 Content.BackgroundTransparency = 1
 Content.ZIndex = 101
 
 local function notify(text)
     local n = Instance.new("Frame", ScreenGui)
-    n.Size = UDim2.new(0, 250, 0, 34)
-    n.Position = UDim2.new(1, -270, 1, 40)
+    n.Size = UDim2.new(0, 240, 0, 32)
+    n.Position = UDim2.new(1, -256, 1, 40)
     n.AnchorPoint = Vector2.new(0, 1)
     n.BackgroundColor3 = C.PanelSoft
-    n.BackgroundTransparency = 0.1
+    n.BackgroundTransparency = 0.05
     n.BorderSizePixel = 0
     n.ZIndex = 300
-    Instance.new("UICorner", n).CornerRadius = UDim.new(0, 8)
+    Instance.new("UICorner", n).CornerRadius = UDim.new(0, 2)
     local s = Instance.new("UIStroke", n)
     s.Color = C.Border
     s.Transparency = 0.4
 
     local lbl = Instance.new("TextLabel", n)
     lbl.Size = UDim2.new(1, -20, 1, 0)
-    lbl.Position = UDim2.new(0, 12, 0, 0)
+    lbl.Position = UDim2.new(0, 10, 0, 0)
     lbl.BackgroundTransparency = 1
     lbl.Text = text
     lbl.TextColor3 = C.Text
-    lbl.TextSize = 12
+    lbl.TextSize = 11
     lbl.TextXAlignment = Enum.TextXAlignment.Left
     lbl.Active = false
     applyFont(lbl)
 
     TweenService:Create(n, TweenInfo.new(0.3, Enum.EasingStyle.Quint), {
-        Position = UDim2.new(1, -270, 1, -16),
+        Position = UDim2.new(1, -256, 1, -16),
     }):Play()
     task.wait(2)
     TweenService:Create(n, TweenInfo.new(0.3, Enum.EasingStyle.Quint), {
-        Position = UDim2.new(1, -270, 1, 40),
+        Position = UDim2.new(1, -256, 1, 40),
     }):Play()
     TweenService:Create(s, TweenInfo.new(0.3), {Transparency = 1}):Play()
     TweenService:Create(n, TweenInfo.new(0.3), {BackgroundTransparency = 1}):Play()
@@ -398,10 +455,10 @@ LogLayout.VerticalAlignment = Enum.VerticalAlignment.Top
 local logCounter = 0
 
 local LOG_COLORS = {
-    info    = Color3.fromRGB(230, 230, 235),
-    success = Color3.fromRGB(150, 210, 165),
-    error   = Color3.fromRGB(220, 95, 95),
-    warn    = Color3.fromRGB(220, 180, 100),
+    info    = Color3.fromRGB(220, 220, 224),
+    success = Color3.fromRGB(140, 195, 155),
+    error   = Color3.fromRGB(200, 85,  85),
+    warn    = Color3.fromRGB(200, 165, 95),
 }
 
 local function pushLog(text, kind)
@@ -410,13 +467,13 @@ local function pushLog(text, kind)
     local col = LOG_COLORS[kind] or LOG_COLORS.info
 
     local bg = Instance.new("Frame", LogContainer)
-    bg.Size = UDim2.new(1, 0, 0, 26)
+    bg.Size = UDim2.new(1, 0, 0, 24)
     bg.BackgroundColor3 = C.PanelDark
     bg.BackgroundTransparency = 1
     bg.BorderSizePixel = 0
     bg.LayoutOrder = logCounter
     bg.ZIndex = 401
-    Instance.new("UICorner", bg).CornerRadius = UDim.new(0, 3)
+    Instance.new("UICorner", bg).CornerRadius = UDim.new(0, 2)
 
     local st = Instance.new("UIStroke", bg)
     st.Color = C.Border
@@ -437,7 +494,7 @@ local function pushLog(text, kind)
     lbl.BackgroundTransparency = 1
     lbl.Text = string.format("[%s] %s", os.date("%H:%M:%S"), text)
     lbl.TextColor3 = col
-    lbl.TextSize = 12
+    lbl.TextSize = 11
     lbl.TextXAlignment = Enum.TextXAlignment.Left
     lbl.TextTransparency = 1
     lbl.TextStrokeTransparency = 0.6
@@ -462,98 +519,34 @@ local function pushLog(text, kind)
     end)
 end
 
--- ==================== WATERMARK (v2) ====================
+-- ==================== WATERMARK ====================
 local Watermark = Instance.new("Frame")
 Watermark.Name = "AbaddonWatermark"
-Watermark.AutomaticSize = Enum.AutomaticSize.X
-Watermark.Size = UDim2.new(0, 0, 0, 26)
+Watermark.Size = UDim2.new(0, 480, 0, 26)
 Watermark.Position = UDim2.new(0.5, 0, 1, -40)
 Watermark.AnchorPoint = Vector2.new(0.5, 1)
 Watermark.BackgroundColor3 = C.PanelDark
-Watermark.BackgroundTransparency = 0.2
+Watermark.BackgroundTransparency = 0.15
 Watermark.BorderSizePixel = 0
-Watermark.ZIndex = 260
+Watermark.ZIndex = 250
 Watermark.Parent = ScreenGui
-Instance.new("UICorner", Watermark).CornerRadius = UDim.new(0, 8)
+Instance.new("UICorner", Watermark).CornerRadius = UDim.new(0, 2)
 local wmStroke = Instance.new("UIStroke", Watermark)
 wmStroke.Color = C.Border
-wmStroke.Transparency = 0.4
+wmStroke.Transparency = 0.5
 wmStroke.Thickness = 1
 
-local wmTopGlow = Instance.new("Frame", Watermark)
-wmTopGlow.Size = UDim2.new(1, -16, 0, 1)
-wmTopGlow.Position = UDim2.new(0, 8, 0, 0)
-wmTopGlow.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-wmTopGlow.BackgroundTransparency = 0.85
-wmTopGlow.BorderSizePixel = 0
-wmTopGlow.ZIndex = 261
-
-local wmPad = Instance.new("UIPadding", Watermark)
-wmPad.PaddingLeft = UDim.new(0, 12)
-wmPad.PaddingRight = UDim.new(0, 12)
-wmPad.PaddingTop = UDim.new(0, 4)
-wmPad.PaddingBottom = UDim.new(0, 4)
-
-local wmLayout = Instance.new("UIListLayout", Watermark)
-wmLayout.FillDirection = Enum.FillDirection.Horizontal
-wmLayout.VerticalAlignment = Enum.VerticalAlignment.Center
-wmLayout.SortOrder = Enum.SortOrder.LayoutOrder
-wmLayout.Padding = UDim.new(0, 8)
-
-local wmDot = Instance.new("Frame", Watermark)
-wmDot.Size = UDim2.new(0, 6, 0, 6)
-wmDot.BackgroundColor3 = C.Green
-wmDot.BorderSizePixel = 0
-wmDot.LayoutOrder = 1
-Instance.new("UICorner", wmDot).CornerRadius = UDim.new(1, 0)
-
-task.spawn(function()
-    while wmDot.Parent do
-        local t1 = TweenService:Create(wmDot, TweenInfo.new(1.1, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {BackgroundTransparency = 0.65})
-        t1:Play() t1.Completed:Wait()
-        if not wmDot.Parent then break end
-        local t2 = TweenService:Create(wmDot, TweenInfo.new(1.1, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {BackgroundTransparency = 0})
-        t2:Play() t2.Completed:Wait()
-    end
-end)
-
-local function wmLabel(order, text, color)
-    local lbl = Instance.new("TextLabel", Watermark)
-    lbl.AutomaticSize = Enum.AutomaticSize.X
-    lbl.Size = UDim2.new(0, 0, 1, 0)
-    lbl.BackgroundTransparency = 1
-    lbl.Text = text
-    lbl.TextColor3 = color or C.Text
-    lbl.TextSize = 11
-    lbl.TextXAlignment = Enum.TextXAlignment.Left
-    lbl.LayoutOrder = order
-    lbl.Active = false
-    applyFont(lbl)
-    return lbl
-end
-
-local function wmDiv(order)
-    local d = Instance.new("Frame", Watermark)
-    d.Size = UDim2.new(0, 1, 0, 10)
-    d.BackgroundColor3 = C.BorderSoft
-    d.BorderSizePixel = 0
-    d.LayoutOrder = order
-    return d
-end
-
-local wmBrand  = wmLabel(2, "abaddon", C.Text)
-local wmD1     = wmDiv(3)
-local wmUser   = wmLabel(4, "@" .. LocalPlayer.Name, C.TextDim)
-local wmD2     = wmDiv(5)
-local wmFps    = wmLabel(6, "0 FPS", C.Green)
-local wmD3     = wmDiv(7)
-local wmPing   = wmLabel(8, "0 ms", C.Green)
-local wmD4     = wmDiv(9)
-local wmTime   = wmLabel(10, "00:00:00", C.TextDim)
-local wmD5     = wmDiv(11)
-local wmUptime = wmLabel(12, "0s", C.TextFaint)
-local wmD6     = wmDiv(13)
-local wmPlrs   = wmLabel(14, "1 plr", C.TextDim)
+local WmLabel = Instance.new("TextLabel", Watermark)
+WmLabel.Size = UDim2.new(1, -24, 1, 0)
+WmLabel.Position = UDim2.new(0, 12, 0, 0)
+WmLabel.BackgroundTransparency = 1
+WmLabel.RichText = true
+WmLabel.TextColor3 = C.Text
+WmLabel.TextSize = 12
+WmLabel.TextXAlignment = Enum.TextXAlignment.Center
+WmLabel.ZIndex = 251
+WmLabel.Active = false
+applyFont(WmLabel)
 
 local fpsCounter, fpsTime, currentFps = 0, 0, 0
 RunService.RenderStepped:Connect(function(dt)
@@ -566,26 +559,16 @@ RunService.RenderStepped:Connect(function(dt)
     end
 end)
 
-local function fpsColor(fps)
-    if fps >= 50 then return C.Green end
-    if fps >= 30 then return C.Yellow end
-    return C.Red
+local function fpsColorHex(fps)
+    if fps >= 50 then return "rgb(140, 195, 155)" end
+    if fps >= 30 then return "rgb(200, 165, 95)" end
+    return "rgb(200, 85, 85)"
 end
 
-local function pingColor(ping)
-    if ping <= 80 then return C.Green end
-    if ping <= 150 then return C.Yellow end
-    return C.Red
-end
-
-local function formatUptime(sec)
-    sec = math.floor(sec)
-    local h = math.floor(sec / 3600)
-    local m = math.floor((sec % 3600) / 60)
-    local s = sec % 60
-    if h > 0 then return string.format("%dh %02dm", h, m) end
-    if m > 0 then return string.format("%dm %02ds", m, s) end
-    return string.format("%ds", s)
+local function pingColorHex(ping)
+    if ping <= 80 then return "rgb(140, 195, 155)" end
+    if ping <= 150 then return "rgb(200, 165, 95)" end
+    return "rgb(200, 85, 85)"
 end
 
 task.spawn(function()
@@ -594,37 +577,32 @@ task.spawn(function()
             return math.floor(LocalPlayer:GetNetworkPing() * 1000)
         end)
         if not ok then ping = 0 end
-
         local name = State.HideUsername and "@ellieabaddon" or ("@" .. LocalPlayer.Name)
-        wmUser.Text = name
-        wmFps.Text = tostring(currentFps) .. " FPS"
-        wmFps.TextColor3 = fpsColor(currentFps)
-        wmPing.Text = tostring(ping) .. " ms"
-        wmPing.TextColor3 = pingColor(ping)
-        wmTime.Text = os.date("%H:%M:%S")
-        wmUptime.Text = "up " .. formatUptime(tick() - SCRIPT_START)
-        local cnt = #Players:GetPlayers()
-        wmPlrs.Text = tostring(cnt) .. (cnt == 1 and " player" or " players")
-
+        WmLabel.Text = string.format(
+            '<font color="rgb(220,220,224)">abaddon</font>  <font color="rgb(72,72,78)">|</font>  <font color="rgb(220,220,224)">%s</font>  <font color="rgb(72,72,78)">|</font>  <font color="%s">FPS %d</font>  <font color="rgb(72,72,78)">|</font>  <font color="%s">PING %d</font>',
+            name, fpsColorHex(currentFps), currentFps, pingColorHex(ping), ping
+        )
         task.wait(0.25)
     end
 end)
 
 -- ==================== HOODWINK ====================
 local hoodwinkImg = nil
+local HOODWINK_URL = "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQ8uNn4Rwil6tRzyFXmlRUCOnCAnUlw33veEbK-auHw11oiZKgMxqOjrA2C&s=10"
+
 local function setHoodwink(on)
     State.Hoodwink = on
     if on then
-        if hoodwinkImg then return end
+        if hoodwinkImg and hoodwinkImg.Parent then return end
         local img = Instance.new("ImageLabel")
         img.Name = "AbaddonHoodwink"
-        img.Size = UDim2.new(0, 200, 0, 200)
+        img.Size = UDim2.new(0, 260, 0, 260)
         img.Position = UDim2.new(1, -20, 0, 20)
         img.AnchorPoint = Vector2.new(1, 0)
         img.BackgroundTransparency = 1
-        img.Image = "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQ8uNn4Rwil6tRzyFXmlRUCOnCAnUlw33veEbK-auHw11oiZKgMxqOjrA2C&s=10"
         img.ZIndex = 2147483600
         img.Parent = ScreenGui
+        img.Image = resolveImageUrl(HOODWINK_URL)
 
         img.ImageTransparency = 1
         TweenService:Create(img, TweenInfo.new(0.35, Enum.EasingStyle.Quint), {ImageTransparency = 0}):Play()
@@ -646,7 +624,7 @@ local function setActiveTab(name)
     for n, t in pairs(Tabs) do
         local active = (n == name)
         TweenService:Create(t.btn, TweenInfo.new(0.2, Enum.EasingStyle.Quart), {
-            BackgroundTransparency = active and 0.55 or 1,
+            BackgroundTransparency = active and 0.65 or 1,
         }):Play()
         TweenService:Create(t.lbl, TweenInfo.new(0.2), {
             TextColor3 = active and C.Text or C.TextDim,
@@ -660,7 +638,7 @@ end
 
 local function createTab(name, order)
     local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(1, 0, 0, 34)
+    btn.Size = UDim2.new(1, 0, 0, 32)
     btn.BackgroundColor3 = C.PanelSoft
     btn.BackgroundTransparency = 1
     btn.Text = ""
@@ -668,11 +646,11 @@ local function createTab(name, order)
     btn.LayoutOrder = order
     btn.ZIndex = 103
     btn.Parent = TabList
-    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 2)
 
     local bar = Instance.new("Frame", btn)
-    bar.Size = UDim2.new(0, 2, 0, 16)
-    bar.Position = UDim2.new(0, 0, 0.5, -8)
+    bar.Size = UDim2.new(0, 2, 0, 12)
+    bar.Position = UDim2.new(0, 0, 0.5, -6)
     bar.BackgroundColor3 = C.Accent
     bar.BackgroundTransparency = 1
     bar.BorderSizePixel = 0
@@ -682,11 +660,11 @@ local function createTab(name, order)
 
     local lbl = Instance.new("TextLabel", btn)
     lbl.Size = UDim2.new(1, -20, 1, 0)
-    lbl.Position = UDim2.new(0, 16, 0, 0)
+    lbl.Position = UDim2.new(0, 14, 0, 0)
     lbl.BackgroundTransparency = 1
     lbl.Text = name
     lbl.TextColor3 = C.TextDim
-    lbl.TextSize = 12
+    lbl.TextSize = 11
     lbl.TextXAlignment = Enum.TextXAlignment.Left
     lbl.Active = false
     lbl.ZIndex = 104
@@ -709,7 +687,7 @@ local function createTab(name, order)
     page.CanvasSize = UDim2.new(0, 0, 0, 0)
 
     local pl = Instance.new("UIListLayout", page)
-    pl.Padding = UDim.new(0, 6)
+    pl.Padding = UDim.new(0, 4)
     pl.SortOrder = Enum.SortOrder.LayoutOrder
 
     local pad = Instance.new("UIPadding", page)
@@ -728,16 +706,16 @@ end
 
 local function makeRow(parent, order, h)
     local row = Instance.new("Frame", parent)
-    row.Size = UDim2.new(1, 0, 0, h or 38)
+    row.Size = UDim2.new(1, 0, 0, h or 36)
     row.BackgroundColor3 = C.PanelSoft
-    row.BackgroundTransparency = 0.65
+    row.BackgroundTransparency = 0.5
     row.BorderSizePixel = 0
     row.LayoutOrder = order
     row.ZIndex = 103
-    Instance.new("UICorner", row).CornerRadius = UDim.new(0, 8)
+    Instance.new("UICorner", row).CornerRadius = UDim.new(0, 2)
     local st = Instance.new("UIStroke", row)
     st.Color = C.Border
-    st.Transparency = 0.75
+    st.Transparency = 0.6
     st.Thickness = 1
     return row
 end
@@ -746,27 +724,27 @@ local function createToggle(parent, label, default, order, callback, stateKey)
     local row = makeRow(parent, order)
     local lbl = Instance.new("TextLabel", row)
     lbl.Size = UDim2.new(1, -80, 1, 0)
-    lbl.Position = UDim2.new(0, 16, 0, 0)
+    lbl.Position = UDim2.new(0, 14, 0, 0)
     lbl.BackgroundTransparency = 1
     lbl.Text = label
     lbl.TextColor3 = C.Text
-    lbl.TextSize = 12
+    lbl.TextSize = 11
     lbl.TextXAlignment = Enum.TextXAlignment.Left
     lbl.Active = false
     applyFont(lbl)
 
     local toggle = Instance.new("Frame", row)
-    toggle.Size = UDim2.new(0, 36, 0, 18)
-    toggle.Position = UDim2.new(1, -52, 0.5, -9)
+    toggle.Size = UDim2.new(0, 32, 0, 16)
+    toggle.Position = UDim2.new(1, -46, 0.5, -8)
     toggle.BackgroundColor3 = default and C.Accent or C.ToggleOff
     toggle.BorderSizePixel = 0
     toggle.Active = false
     Instance.new("UICorner", toggle).CornerRadius = UDim.new(1, 0)
 
     local knob = Instance.new("Frame", toggle)
-    knob.Size = UDim2.new(0, 14, 0, 14)
-    knob.Position = default and UDim2.new(1, -16, 0.5, -7) or UDim2.new(0, 2, 0.5, -7)
-    knob.BackgroundColor3 = default and C.PanelDark or Color3.fromRGB(180, 180, 185)
+    knob.Size = UDim2.new(0, 12, 0, 12)
+    knob.Position = default and UDim2.new(1, -14, 0.5, -6) or UDim2.new(0, 2, 0.5, -6)
+    knob.BackgroundColor3 = default and C.PanelDark or Color3.fromRGB(160, 160, 165)
     knob.BorderSizePixel = 0
     knob.Active = false
     Instance.new("UICorner", knob).CornerRadius = UDim.new(1, 0)
@@ -778,8 +756,8 @@ local function createToggle(parent, label, default, order, callback, stateKey)
             BackgroundColor3 = v and C.Accent or C.ToggleOff,
         }):Play()
         TweenService:Create(knob, TweenInfo.new(0.18, Enum.EasingStyle.Quart), {
-            Position = v and UDim2.new(1, -16, 0.5, -7) or UDim2.new(0, 2, 0.5, -7),
-            BackgroundColor3 = v and C.PanelDark or Color3.fromRGB(180, 180, 185),
+            Position = v and UDim2.new(1, -14, 0.5, -6) or UDim2.new(0, 2, 0.5, -6),
+            BackgroundColor3 = v and C.PanelDark or Color3.fromRGB(160, 160, 165),
         }):Play()
         if callback then callback(v, silent) end
     end
@@ -804,27 +782,27 @@ local function createInput(parent, label, default, order, callback, stateKey)
     local row = makeRow(parent, order)
     local lbl = Instance.new("TextLabel", row)
     lbl.Size = UDim2.new(1, -150, 1, 0)
-    lbl.Position = UDim2.new(0, 16, 0, 0)
+    lbl.Position = UDim2.new(0, 14, 0, 0)
     lbl.BackgroundTransparency = 1
     lbl.Text = label
     lbl.TextColor3 = C.Text
-    lbl.TextSize = 12
+    lbl.TextSize = 11
     lbl.TextXAlignment = Enum.TextXAlignment.Left
     lbl.Active = false
     applyFont(lbl)
 
     local box = Instance.new("TextBox", row)
-    box.Size = UDim2.new(0, 96, 0, 24)
-    box.Position = UDim2.new(1, -108, 0.5, -12)
+    box.Size = UDim2.new(0, 92, 0, 22)
+    box.Position = UDim2.new(1, -102, 0.5, -11)
     box.BackgroundColor3 = C.PanelDark
     box.BackgroundTransparency = 0.2
     box.Text = tostring(default)
     box.TextColor3 = C.Text
     box.PlaceholderText = "value"
-    box.TextSize = 12
+    box.TextSize = 11
     box.ClearTextOnFocus = false
     box.ZIndex = 104
-    Instance.new("UICorner", box).CornerRadius = UDim.new(0, 6)
+    Instance.new("UICorner", box).CornerRadius = UDim.new(0, 2)
     local st = Instance.new("UIStroke", box)
     st.Color = C.Border
     st.Transparency = 0.5
@@ -856,7 +834,7 @@ local function createButton(parent, label, order, callback)
     btn.BackgroundTransparency = 1
     btn.Text = label
     btn.TextColor3 = C.Text
-    btn.TextSize = 12
+    btn.TextSize = 11
     btn.AutoButtonColor = false
     btn.ZIndex = 104
     applyFont(btn)
@@ -874,43 +852,43 @@ local function createTextAction(parent, label, placeholder, order, callback)
     local row = makeRow(parent, order)
     local lbl = Instance.new("TextLabel", row)
     lbl.Size = UDim2.new(1, -220, 1, 0)
-    lbl.Position = UDim2.new(0, 16, 0, 0)
+    lbl.Position = UDim2.new(0, 14, 0, 0)
     lbl.BackgroundTransparency = 1
     lbl.Text = label
     lbl.TextColor3 = C.Text
-    lbl.TextSize = 12
+    lbl.TextSize = 11
     lbl.TextXAlignment = Enum.TextXAlignment.Left
     lbl.Active = false
     applyFont(lbl)
 
     local box = Instance.new("TextBox", row)
-    box.Size = UDim2.new(0, 130, 0, 24)
-    box.Position = UDim2.new(1, -178, 0.5, -12)
+    box.Size = UDim2.new(0, 130, 0, 22)
+    box.Position = UDim2.new(1, -176, 0.5, -11)
     box.BackgroundColor3 = C.PanelDark
     box.BackgroundTransparency = 0.2
     box.Text = ""
     box.TextColor3 = C.Text
     box.PlaceholderText = placeholder
-    box.TextSize = 12
+    box.TextSize = 11
     box.ClearTextOnFocus = false
     box.ZIndex = 104
-    Instance.new("UICorner", box).CornerRadius = UDim.new(0, 6)
+    Instance.new("UICorner", box).CornerRadius = UDim.new(0, 2)
     local bst = Instance.new("UIStroke", box)
     bst.Color = C.Border
     bst.Transparency = 0.5
     applyFont(box)
 
     local btn = Instance.new("TextButton", row)
-    btn.Size = UDim2.new(0, 38, 0, 24)
-    btn.Position = UDim2.new(1, -42, 0.5, -12)
+    btn.Size = UDim2.new(0, 36, 0, 22)
+    btn.Position = UDim2.new(1, -40, 0.5, -11)
     btn.BackgroundColor3 = C.PanelDark
     btn.BackgroundTransparency = 0.2
     btn.Text = "Go"
     btn.TextColor3 = C.Text
-    btn.TextSize = 12
+    btn.TextSize = 11
     btn.AutoButtonColor = false
     btn.ZIndex = 104
-    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 2)
     local btnst = Instance.new("UIStroke", btn)
     btnst.Color = C.Border
     btnst.Transparency = 0.5
@@ -935,35 +913,35 @@ local function createSlider(parent, label, min, max, default, order, callback, o
     max = max or 100
     default = math.clamp(default or min, min, max)
 
-    local row = makeRow(parent, order, 46)
+    local row = makeRow(parent, order, 44)
 
     local lbl = Instance.new("TextLabel", row)
-    lbl.Size = UDim2.new(1, -90, 0, 20)
-    lbl.Position = UDim2.new(0, 16, 0, 4)
+    lbl.Size = UDim2.new(1, -90, 0, 18)
+    lbl.Position = UDim2.new(0, 14, 0, 4)
     lbl.BackgroundTransparency = 1
     lbl.Text = label
     lbl.TextColor3 = C.Text
-    lbl.TextSize = 12
+    lbl.TextSize = 11
     lbl.TextXAlignment = Enum.TextXAlignment.Left
     lbl.Active = false
     lbl.ZIndex = 104
     applyFont(lbl)
 
     local valLbl = Instance.new("TextLabel", row)
-    valLbl.Size = UDim2.new(0, 70, 0, 20)
-    valLbl.Position = UDim2.new(1, -86, 0, 4)
+    valLbl.Size = UDim2.new(0, 70, 0, 18)
+    valLbl.Position = UDim2.new(1, -84, 0, 4)
     valLbl.BackgroundTransparency = 1
     valLbl.Text = tostring(default)
     valLbl.TextColor3 = C.TextDim
-    valLbl.TextSize = 12
+    valLbl.TextSize = 11
     valLbl.TextXAlignment = Enum.TextXAlignment.Right
     valLbl.Active = false
     valLbl.ZIndex = 104
     applyFont(valLbl)
 
     local track = Instance.new("Frame", row)
-    track.Size = UDim2.new(1, -32, 0, 4)
-    track.Position = UDim2.new(0, 16, 0, 34)
+    track.Size = UDim2.new(1, -28, 0, 3)
+    track.Position = UDim2.new(0, 14, 0, 32)
     track.BackgroundColor3 = C.ToggleOff
     track.BorderSizePixel = 0
     track.ZIndex = 104
@@ -979,9 +957,9 @@ local function createSlider(parent, label, min, max, default, order, callback, o
     Instance.new("UICorner", fill).CornerRadius = UDim.new(1, 0)
 
     local knob = Instance.new("Frame", row)
-    knob.Size = UDim2.new(0, 12, 0, 12)
+    knob.Size = UDim2.new(0, 10, 0, 10)
     knob.AnchorPoint = Vector2.new(0.5, 0.5)
-    knob.Position = UDim2.new(initialRel, 16, 0, 36)
+    knob.Position = UDim2.new(initialRel, 14, 0, 34)
     knob.BackgroundColor3 = C.Accent
     knob.BorderSizePixel = 0
     knob.ZIndex = 106
@@ -995,7 +973,7 @@ local function createSlider(parent, label, min, max, default, order, callback, o
         current = v
         local rel = (v - min) / (max - min)
         fill.Size = UDim2.new(rel, 0, 1, 0)
-        knob.Position = UDim2.new(0, 16 + rel * (track.AbsoluteSize.X), 0, 36)
+        knob.Position = UDim2.new(0, 14 + rel * (track.AbsoluteSize.X), 0, 34)
         valLbl.Text = tostring(v)
         if callback then callback(v, silent) end
     end
@@ -1007,7 +985,7 @@ local function createSlider(parent, label, min, max, default, order, callback, o
 
     track:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
         local rel = (current - min) / (max - min)
-        knob.Position = UDim2.new(0, 16 + rel * track.AbsoluteSize.X, 0, 36)
+        knob.Position = UDim2.new(0, 14 + rel * track.AbsoluteSize.X, 0, 34)
     end)
 
     local hit = Instance.new("TextButton", row)
@@ -1385,6 +1363,7 @@ end
 
 local function setCameraFOV(value, silent)
     State.CameraFOV = value
+    if not cam then cam = workspace.CurrentCamera end
     if cam then
         cam.FieldOfView = value
     end
@@ -1432,6 +1411,8 @@ local function setFly(on)
         local c = LocalPlayer.Character
         local root = c and c:FindFirstChild("HumanoidRootPart")
         if not root or not flyBodyVel or not flyBodyGyro then return end
+        if not cam then cam = workspace.CurrentCamera end
+        if not cam then return end
         flyBodyGyro.CFrame = cam.CFrame
 
         local move = Vector3.zero
@@ -1667,11 +1648,12 @@ createInput(PlayerPage, "WalkSpeed", 16, 1, function(v)
     pushLog("WalkSpeed изменён на " .. tostring(v), "info")
 end, "WalkSpeed")
 
-createInput(PlayerPage, "Hip Height", 2, 2, function(v)
+-- ФИКС: HipHeight применяется только если он не 0
+createInput(PlayerPage, "Hip Height", 0, 2, function(v)
     State.HipHeight = v
     local char = LocalPlayer.Character
     local hum = char and char:FindFirstChildOfClass("Humanoid")
-    if hum then hum.HipHeight = v end
+    if hum and v ~= 0 then hum.HipHeight = v end
     notify("HipHeight: " .. tostring(v))
     pushLog("HipHeight изменён на " .. tostring(v), "info")
 end, "HipHeight")
@@ -1827,7 +1809,7 @@ local function applyPlayerESP()
                     lbl.Name = "Label"
                     lbl.Size = UDim2.new(1, 0, 1, 0)
                     lbl.BackgroundTransparency = 1
-                    lbl.TextSize = 13
+                    lbl.TextSize = 12
                     lbl.TextStrokeTransparency = 0.35
                     lbl.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
                     applyFont(lbl)
@@ -1884,7 +1866,9 @@ local ActionPath      = "Survivor-mob.Controls.action.check"
 local isProcessingHit = false
 
 local function GetActionTarget()
-    local current = PlayerGui
+    local pg = LocalPlayer:FindFirstChild("PlayerGui")
+    if not pg then return nil end
+    local current = pg
     for segment in string.gmatch(ActionPath, "[^%.]+") do
         current = current and current:FindFirstChild(segment)
     end
@@ -1922,7 +1906,9 @@ _G.ASC_MainLoop = RunService.Heartbeat:Connect(function()
     if not State.AutoSkillCheck then isProcessingHit = false return end
     if EvaluateTeamState() ~= "survivor" then return end
 
-    local prompt = PlayerGui:FindFirstChild("SkillCheckPromptGui")
+    local pg = LocalPlayer:FindFirstChild("PlayerGui")
+    if not pg then return end
+    local prompt = pg:FindFirstChild("SkillCheckPromptGui")
     if not prompt then isProcessingHit = false return end
 
     local check = prompt:FindFirstChild("Check")
@@ -1965,18 +1951,18 @@ local function setOpen(open)
         Panel.Visible = true
         Overlay.Visible = true
         Grid.Visible = true
-        Panel.Size = UDim2.new(0, 600, 0, 400)
+        Panel.Size = UDim2.new(0, 580, 0, 390)
         Panel.BackgroundTransparency = 1
         Overlay.BackgroundTransparency = 1
-        TweenService:Create(Panel, TweenInfo.new(0.32, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
-            Size = UDim2.new(0, 640, 0, 430),
-            BackgroundTransparency = 0.1,
+        TweenService:Create(Panel, TweenInfo.new(0.3, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+            Size = UDim2.new(0, 620, 0, 420),
+            BackgroundTransparency = 0.06,
         }):Play()
-        TweenService:Create(Overlay, TweenInfo.new(0.3), {BackgroundTransparency = 0.45}):Play()
-        TweenService:Create(Blur, TweenInfo.new(0.35), {Size = 16}):Play()
+        TweenService:Create(Overlay, TweenInfo.new(0.3), {BackgroundTransparency = 0.5}):Play()
+        TweenService:Create(Blur, TweenInfo.new(0.32), {Size = 8}):Play()
     else
         TweenService:Create(Panel, TweenInfo.new(0.22, Enum.EasingStyle.Quart), {
-            Size = UDim2.new(0, 600, 0, 400),
+            Size = UDim2.new(0, 580, 0, 390),
             BackgroundTransparency = 1,
         }):Play()
         TweenService:Create(Overlay, TweenInfo.new(0.24), {BackgroundTransparency = 1}):Play()
@@ -2045,14 +2031,14 @@ end)
 -- ==================== WELCOME ====================
 local function showWelcome()
     local popup = Instance.new("Frame", ScreenGui)
-    popup.Size = UDim2.new(0, 320, 0, 48)
+    popup.Size = UDim2.new(0, 300, 0, 40)
     popup.Position = UDim2.new(0.5, 0, 1, 40)
     popup.AnchorPoint = Vector2.new(0.5, 1)
     popup.BackgroundColor3 = C.Panel
     popup.BackgroundTransparency = 1
     popup.BorderSizePixel = 0
     popup.ZIndex = 300
-    Instance.new("UICorner", popup).CornerRadius = UDim.new(0, 10)
+    Instance.new("UICorner", popup).CornerRadius = UDim.new(0, 2)
 
     local st = Instance.new("UIStroke", popup)
     st.Color = C.Border
@@ -2063,15 +2049,15 @@ local function showWelcome()
     txt.Size = UDim2.new(1, -24, 1, 0)
     txt.Position = UDim2.new(0, 12, 0, 0)
     txt.BackgroundTransparency = 1
-    txt.Text = "Welcome to Abaddon, @" .. LocalPlayer.Name
+    txt.Text = "Welcome, @" .. LocalPlayer.Name
     txt.TextColor3 = C.Text
-    txt.TextSize = 12
+    txt.TextSize = 11
     txt.TextXAlignment = Enum.TextXAlignment.Center
     txt.ZIndex = 301
     applyFont(txt)
 
     TweenService:Create(popup, TweenInfo.new(0.4, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
-        Position = UDim2.new(0.5, 0, 1, -40),
+        Position = UDim2.new(0.5, 0, 1, -36),
         BackgroundTransparency = 0.05,
     }):Play()
     TweenService:Create(st, TweenInfo.new(0.4), {Transparency = 0.4}):Play()
@@ -2093,7 +2079,11 @@ LocalPlayer.CharacterAdded:Connect(function(char)
     local hum = char:FindFirstChildOfClass("Humanoid")
     if hum then
         hum.WalkSpeed = State.WalkSpeed
-        hum.HipHeight = State.HipHeight
+        -- ФИКС: HipHeight не трогаем, если он 0 (иначе персонаж поднимается в воздух)
+        if State.HipHeight and State.HipHeight ~= 0 then
+            hum.HipHeight = State.HipHeight
+        end
+        hum.PlatformStand = false
     end
     if State.Noclip then setNoclip(true) end
     if State.BackWalk then setBackWalk(true) end
