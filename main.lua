@@ -23,6 +23,8 @@ local function track(c) Conns[#Conns + 1] = c return c end
 _G.AbaddonCleanup = function()
     for _, c in ipairs(Conns) do pcall(function() c:Disconnect() end) end
     Conns = {}
+    if _G.AbaddonFakeLagStop then pcall(_G.AbaddonFakeLagStop) end
+    if _G.AbaddonRestoreCollide then pcall(_G.AbaddonRestoreCollide) end
 end
 
 local KEY_TOGGLE  = Enum.KeyCode.RightShift
@@ -72,7 +74,7 @@ local State = {
     AutoSkillCheck = false,
     AntiAFK        = false,
     WalkSpeed      = 16,
-    HipHeight      = 0,
+    WalkSpeedLock  = true,
     Noclip         = false,
     TPTool         = false,
     BackWalk       = false,
@@ -85,6 +87,11 @@ local State = {
     Hoodwink       = false,
     HideUsername   = false,
     BindIsland     = true,
+    Logs           = true,
+    Crosshair      = false,
+    CrosshairSize  = 10,
+    FakeLag        = false,
+    FakeLagTime    = 200,
     ESP_SurvivorColorHex  = "8CB4DC",
     ESP_KillerColorHex    = "C85555",
     ESP_GeneratorColorHex = "8CC89B",
@@ -338,13 +345,13 @@ local TopTitle = new("TextLabel", {
 fontBold(TopTitle)
 
 local SubPill = new("Frame", {
-    Size = UDim2.fromOffset(52, 18), Position = UDim2.fromOffset(112, 18),
+    Size = UDim2.fromOffset(64, 18), Position = UDim2.fromOffset(112, 18),
     BackgroundColor3 = C.White, BackgroundTransparency = 0.92, BorderSizePixel = 0, ZIndex = 6, Active = false,
 }, TopBar)
 corner(SubPill, 9)
 glassStroke(SubPill, 0.5)
 local TopSub = new("TextLabel", {
-    Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Text = "lzteam",
+    Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Text = "by ellie",
     TextColor3 = C.TextDim, TextSize = 9, Active = false, ZIndex = 7,
 }, SubPill)
 fontMed(TopSub)
@@ -422,39 +429,12 @@ local Content = new("Frame", {
 }, Panel)
 
 -- ==================== TOASTS ====================
-local function notify(text)
-    task.spawn(function()
-        local n = new("CanvasGroup", {
-            Size = UDim2.fromOffset(250, 38), Position = UDim2.new(1, 20, 1, -60),
-            AnchorPoint = Vector2.new(0, 1), BackgroundColor3 = C.Glass, BackgroundTransparency = 0.25,
-            BorderSizePixel = 0, GroupTransparency = 1, ZIndex = 300,
-        }, ScreenGui)
-        corner(n, 14)
-        glassStroke(n, 1)
-        sheen(n, 0.14, 35, 14)
-        local dot = new("Frame", {
-            Size = UDim2.fromOffset(6, 6), Position = UDim2.new(0, 14, 0.5, -3),
-            BackgroundColor3 = C.Accent, BorderSizePixel = 0, ZIndex = 3,
-        }, n)
-        corner(dot, 3)
-        local lbl = new("TextLabel", {
-            Size = UDim2.new(1, -40, 1, 0), Position = UDim2.fromOffset(28, 0),
-            BackgroundTransparency = 1, Text = text, TextColor3 = C.Text, TextSize = 11,
-            TextXAlignment = Enum.TextXAlignment.Left, Active = false, ZIndex = 3,
-        }, n)
-        fontMed(lbl)
-
-        tween(n, 0.32, { Position = UDim2.new(1, -266, 1, -60), GroupTransparency = 0 }, Enum.EasingStyle.Quint)
-        task.wait(2.4)
-        tween(n, 0.25, { Position = UDim2.new(1, 20, 1, -60), GroupTransparency = 1 })
-        task.wait(0.3)
-        n:Destroy()
-    end)
-end
+-- bottom-right toasts removed: notify() is intentionally a no-op
+local function notify() end
 
 -- ==================== LOG FEED ====================
 local LogContainer = new("Frame", {
-    Size = UDim2.fromOffset(400, 400), Position = UDim2.fromOffset(16, 16),
+    Size = UDim2.fromOffset(400, 400), Position = UDim2.fromOffset(16, 73),
     BackgroundTransparency = 1, ZIndex = 400,
 }, ScreenGui)
 new("UIListLayout", {
@@ -470,7 +450,22 @@ local LOG_COLORS = {
     warn    = Color3.fromRGB(214, 175, 98),
 }
 
+local MAX_LOGS = 6
+local lastLogText, lastLogTime = nil, 0
+
+local function clearLogs()
+    for _, c in ipairs(LogContainer:GetChildren()) do
+        if c:IsA("GuiObject") then c:Destroy() end
+    end
+end
+
 local function pushLog(text, kind)
+    if not State.Logs then return end
+    -- identical message within 1.5s = spam, skip it
+    local now = os.clock()
+    if text == lastLogText and now - lastLogTime < 1.5 then return end
+    lastLogText, lastLogTime = text, now
+
     kind = kind or "info"
     logCounter = logCounter + 1
     local col = LOG_COLORS[kind] or LOG_COLORS.info
@@ -494,8 +489,16 @@ local function pushLog(text, kind)
     }, bg)
     fontMed(lbl)
 
+    -- keep at most MAX_LOGS entries on screen
+    local alive = {}
+    for _, c in ipairs(LogContainer:GetChildren()) do
+        if c:IsA("CanvasGroup") then alive[#alive + 1] = c end
+    end
+    table.sort(alive, function(a, b) return a.LayoutOrder < b.LayoutOrder end)
+    while #alive > MAX_LOGS do table.remove(alive, 1):Destroy() end
+
     tween(bg, 0.22, { GroupTransparency = 0 })
-    task.delay(5, function()
+    task.delay(4, function()
         if not bg.Parent then return end
         tween(bg, 0.35, { GroupTransparency = 1 })
         task.wait(0.4)
@@ -505,17 +508,17 @@ end
 
 -- ==================== WATERMARK ====================
 local Watermark = new("CanvasGroup", {
-    Name = "AbaddonWatermark", Size = UDim2.fromOffset(440, 30),
+    Name = "AbaddonWatermark", Size = UDim2.fromOffset(560, 40),
     Position = UDim2.new(0.5, 0, 1, -12), AnchorPoint = Vector2.new(0.5, 1),
     BackgroundColor3 = C.Glass, BackgroundTransparency = 0.3, BorderSizePixel = 0, ZIndex = 250,
 }, ScreenGui)
-corner(Watermark, 15)
+corner(Watermark, 20)
 glassStroke(Watermark, 1)
-sheen(Watermark, 0.14, 35, 15)
+sheen(Watermark, 0.14, 35, 20)
 
 local WmLabel = new("TextLabel", {
     Size = UDim2.new(1, -24, 1, 0), Position = UDim2.fromOffset(12, 0),
-    BackgroundTransparency = 1, RichText = true, TextColor3 = C.Text, TextSize = 12,
+    BackgroundTransparency = 1, RichText = true, TextColor3 = C.Text, TextSize = 16,
     TextXAlignment = Enum.TextXAlignment.Center, ZIndex = 3, Active = false,
 }, Watermark)
 fontMed(WmLabel)
@@ -563,7 +566,7 @@ local function setHoodwink(on)
     if on then
         if hoodwinkImg and hoodwinkImg.Parent then return end
         local img = new("ImageLabel", {
-            Name = "AbaddonHoodwink", Size = UDim2.fromOffset(260, 260),
+            Name = "AbaddonHoodwink", Size = UDim2.fromOffset(330, 330),
             Position = UDim2.new(1, -20, 0, 20), AnchorPoint = Vector2.new(1, 0),
             BackgroundTransparency = 1, ZIndex = 2147483600, ImageTransparency = 1,
         }, ScreenGui)
@@ -590,15 +593,21 @@ local KEY_ALIAS = {
     Five = "5", Six = "6", Seven = "7", Eight = "8", Nine = "9",
     Insert = "Ins", Delete = "Del", PageUp = "PgUp", PageDown = "PgDn",
 }
-local function keyDisplay(kc) return KEY_ALIAS[kc.Name] or kc.Name end
+-- a bind is either an Enum.KeyCode or the string "M4" / "M5" (side mouse buttons)
+local function keyName(k) return type(k) == "string" and k or k.Name end
+local function keyDisplay(k)
+    if type(k) == "string" then return k end
+    return KEY_ALIAS[k.Name] or k.Name
+end
 local function keyFromName(nm)
+    if nm == "M4" or nm == "M5" then return nm end
     local ok, kc = pcall(function() return Enum.KeyCode[nm] end)
     return ok and kc or nil
 end
 
 local Island = new("CanvasGroup", {
     Name = "BindIsland", Size = UDim2.fromOffset(ISL_W, 40),
-    Position = UDim2.new(0.5, 0, 0, 48), AnchorPoint = Vector2.new(0.5, 0),
+    Position = UDim2.new(0.5, 0, 0, 105), AnchorPoint = Vector2.new(0.5, 0),
     BackgroundColor3 = C.Glass, BackgroundTransparency = 0.28, BorderSizePixel = 0,
     GroupTransparency = 1, Visible = false, ZIndex = 260,
 }, ScreenGui)
@@ -685,7 +694,8 @@ local function startBinding(entry)
     if prev and prev ~= entry then prev.refreshBadge() end
     entry.refreshBadge()
     refreshIsland()
-    pushLog("Press a key for " .. entry.label .. " (Esc = clear)", "info")
+    pushLog("Press a key / M4 / M5 for " .. entry.label .. " (Esc = clear)", "info")
+    if not iskeypressed then pushLog("M4/M5 need executor support (iskeypressed)", "warn") end
 end
 
 local function cancelBinding()
@@ -730,6 +740,47 @@ track(UserInputService.InputBegan:Connect(function(input, processed)
     if processed or input.UserInputType ~= Enum.UserInputType.Keyboard then return end
     for _, e in ipairs(BindList) do
         if e.key and e.key == input.KeyCode then e.toggle() end
+    end
+end))
+
+-- Roblox does not expose Mouse4 / Mouse5 through UserInputService,
+-- so we poll the OS button state (VK_XBUTTON1 = 0x05, VK_XBUTTON2 = 0x06).
+-- Needs an executor with iskeypressed. M3 is never bindable (it starts the binding).
+local MOUSE_EXTRA = { M4 = 0x05, M5 = 0x06 }
+local mouseExtraDown = { M4 = false, M5 = false }
+
+local function mouseExtraHeld(vk)
+    local ok, res = pcall(iskeypressed, vk)
+    return ok and res == true
+end
+
+local function onExtraMouse(name)
+    if Binding then
+        local e = Binding
+        Binding = nil
+        e.key = name
+        pushLog("Bind: " .. e.label .. " → " .. name, "success")
+        e.refreshBadge()
+        refreshIsland()
+        return
+    end
+    if UserInputService:GetFocusedTextBox() then return end
+    for _, e in ipairs(BindList) do
+        if e.key == name then e.toggle() end
+    end
+end
+
+track(RunService.Heartbeat:Connect(function()
+    if not iskeypressed then return end
+    if isrbxactive and not isrbxactive() then return end
+    for name, vk in pairs(MOUSE_EXTRA) do
+        local held = mouseExtraHeld(vk)
+        if held and not mouseExtraDown[name] then
+            mouseExtraDown[name] = true
+            onExtraMouse(name)
+        elseif not held then
+            mouseExtraDown[name] = false
+        end
     end
 end))
 
@@ -1440,17 +1491,141 @@ local function setAntiAFK(on)
 end
 
 local noclipConn
+local noclipTouched = setmetatable({}, { __mode = "k" })
+local COLLIDE_PARTS = { Head = true, Torso = true, UpperTorso = true, LowerTorso = true }
+
+local function restoreNoclip()
+    -- parts we switched off
+    for part in pairs(noclipTouched) do
+        noclipTouched[part] = nil
+        if part and part.Parent then part.CanCollide = true end
+    end
+    -- fallback (e.g. after re-execute the cache is empty)
+    local char = LocalPlayer.Character
+    if char then
+        for _, p in ipairs(char:GetChildren()) do
+            if p:IsA("BasePart") and COLLIDE_PARTS[p.Name] then p.CanCollide = true end
+        end
+    end
+end
+_G.AbaddonRestoreCollide = restoreNoclip
+
 local function setNoclip(on)
     State.Noclip = on
     if noclipConn then noclipConn:Disconnect() noclipConn = nil end
-    if not on then return end
-    noclipConn = RunService.Stepped:Connect(function()
+    if not on then
+        restoreNoclip()
+        task.defer(restoreNoclip)
+        return
+    end
+    noclipConn = track(RunService.Stepped:Connect(function()
+        if not State.Noclip then return end
         local char = LocalPlayer.Character
         if not char then return end
         for _, p in ipairs(char:GetDescendants()) do
-            if p:IsA("BasePart") and p.CanCollide then p.CanCollide = false end
+            if p:IsA("BasePart") and p.CanCollide then
+                noclipTouched[p] = true
+                p.CanCollide = false
+            end
         end
+    end))
+end
+
+-- ==================== WALKSPEED LOCK ====================
+-- Re-applies the chosen WalkSpeed every physics step and the moment the game changes it.
+-- Does nothing while WalkSpeed is the default 16, so the game's own sprint etc. keeps working.
+local wsHumConn
+local function enforceWalkSpeed(hum)
+    if State.WalkSpeedLock and State.WalkSpeed ~= 16 and hum and hum.WalkSpeed ~= State.WalkSpeed then
+        hum.WalkSpeed = State.WalkSpeed
+    end
+end
+
+track(RunService.Stepped:Connect(function()
+    local c = LocalPlayer.Character
+    local hum = c and c:FindFirstChildOfClass("Humanoid")
+    if hum then enforceWalkSpeed(hum) end
+end))
+
+local function hookWalkSpeed(char)
+    if wsHumConn then wsHumConn:Disconnect() wsHumConn = nil end
+    if not char then return end
+    local hum = char:FindFirstChildOfClass("Humanoid") or char:WaitForChild("Humanoid", 5)
+    if not hum then return end
+    wsHumConn = track(hum:GetPropertyChangedSignal("WalkSpeed"):Connect(function() enforceWalkSpeed(hum) end))
+end
+task.spawn(hookWalkSpeed, LocalPlayer.Character)
+
+-- ==================== FAKE LAG ====================
+-- Chokes outgoing replication for FakeLagTime ms, then releases it in a burst,
+-- so other players see you stutter / teleport. Needs NetworkClient access in the executor.
+local fakeLagToken = 0
+local fakeLagWidget
+
+local function setOutLimit(v)
+    return (pcall(function()
+        game:GetService("NetworkClient"):SetOutgoingKBPSLimit(v)
+    end))
+end
+
+local function setFakeLag(on)
+    State.FakeLag = on
+    fakeLagToken = fakeLagToken + 1
+    local my = fakeLagToken
+    if not on then
+        setOutLimit(math.huge)
+        return
+    end
+    task.spawn(function()
+        while State.FakeLag and fakeLagToken == my do
+            if not setOutLimit(1) then
+                pushLog("Fake Lag: not supported by this executor", "error")
+                if fakeLagWidget then fakeLagWidget.Set(false) end
+                break
+            end
+            task.wait(math.max(State.FakeLagTime, 20) / 1000)
+            setOutLimit(math.huge)
+            task.wait(0.06)
+        end
+        if fakeLagToken == my then setOutLimit(math.huge) end
     end)
+end
+
+_G.AbaddonFakeLagStop = function()
+    fakeLagToken = fakeLagToken + 1
+    State.FakeLag = false
+    setOutLimit(math.huge)
+end
+
+-- ==================== CROSSHAIR ====================
+local crosshairRoot
+local function buildCrosshair()
+    if crosshairRoot then crosshairRoot:Destroy() crosshairRoot = nil end
+    if not State.Crosshair then return end
+    local len = math.clamp(State.CrosshairSize or 10, 2, 80)
+    local gap, thick = 4, 2
+    local root = new("Frame", {
+        Name = "AbaddonCrosshair", Size = UDim2.fromOffset(0, 0),
+        Position = UDim2.fromScale(0.5, 0.5), AnchorPoint = Vector2.new(0.5, 0.5),
+        BackgroundTransparency = 1, ZIndex = 500, Active = false, Visible = not State.Open,
+    }, ScreenGui)
+    local function bar(w, h, x, y)
+        local f = new("Frame", {
+            Size = UDim2.fromOffset(w, h), Position = UDim2.fromOffset(x, y),
+            BackgroundColor3 = C.White, BorderSizePixel = 0, ZIndex = 500, Active = false,
+        }, root)
+        new("UIStroke", { Color = Color3.new(0, 0, 0), Thickness = 1, Transparency = 0.3 }, f)
+    end
+    bar(thick, len, -thick / 2, -gap - len)  -- top
+    bar(thick, len, -thick / 2, gap)         -- bottom
+    bar(len, thick, -gap - len, -thick / 2)  -- left
+    bar(len, thick, gap, -thick / 2)         -- right
+    crosshairRoot = root
+end
+
+local function setCrosshair(on)
+    State.Crosshair = on
+    buildCrosshair()
 end
 
 local tpConn
@@ -1691,7 +1866,7 @@ local function saveConfig()
     end
     data.Binds = {}
     for _, e in ipairs(BindList) do
-        if e.key then data.Binds[e.id] = e.key.Name end
+        if e.key then data.Binds[e.id] = keyName(e.key) end
     end
     local ok, err = pcall(function() writefile(CONFIG_FILE, HttpService:JSONEncode(data)) end)
     if ok then pushLog("Config saved (" .. CONFIG_FILE .. ")", "success")
@@ -1801,14 +1976,11 @@ createInput(MovementPage, "WalkSpeed", 16, 2, function(v, silent)
     pushLog("WalkSpeed set to " .. tostring(v), "info")
 end, "WalkSpeed")
 
-createInput(MovementPage, "Hip Height", 0, 3, function(v, silent)
-    State.HipHeight = v
-    local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
-    if hum and v ~= 0 then hum.HipHeight = v end
+createToggle(MovementPage, "Lock WalkSpeed", true, 3, function(v, silent)
+    State.WalkSpeedLock = v
     if silent then return end
-    notify("HipHeight: " .. tostring(v))
-    pushLog("HipHeight set to " .. tostring(v), "info")
-end, "HipHeight")
+    pushLog("WalkSpeed lock: " .. (v and "ON" or "OFF"), "info")
+end, "WalkSpeedLock")
 
 simpleToggle(MovementPage, "Noclip", 4, nil, function(v) setNoclip(v) end)
 
@@ -1825,6 +1997,12 @@ createSection(MovementPage, "Teleport", 8)
 simpleToggle(MovementPage, "TP Tool  (LMB to teleport)", 9, nil, function(v) setTPTool(v) end)
 createTextAction(MovementPage, "Goto Player", "nickname", 10, function(name) gotoPlayer(name) end)
 
+createSection(MovementPage, "Network", 11)
+fakeLagWidget = simpleToggle(MovementPage, "Fake Lag", 12, nil, function(v) setFakeLag(v) end)
+createInput(MovementPage, "Fake Lag Time (ms)", 200, 13, function(v)
+    State.FakeLagTime = math.clamp(v, 20, 2000)
+end, "FakeLagTime")
+
 -- ==================== FUN ====================
 createSection(FunPage, "Character", 1)
 simpleToggle(FunPage, "Back Walk", 2, nil, function(v) setBackWalk(v) end)
@@ -1832,6 +2010,11 @@ simpleToggle(FunPage, "Spin", 3, nil, function(v) setSpin(v) end)
 
 createSection(FunPage, "Overlay", 4)
 simpleToggle(FunPage, "Hoodwink", 5, nil, function(v) setHoodwink(v) end)
+simpleToggle(FunPage, "Crosshair", 6, "Crosshair", function(v) setCrosshair(v) end)
+createInput(FunPage, "Crosshair Size", 10, 7, function(v)
+    State.CrosshairSize = math.clamp(v, 2, 80)
+    buildCrosshair()
+end, "CrosshairSize")
 
 -- ==================== SETTINGS ====================
 createSection(SettingsPage, "Interface", 1)
@@ -1844,31 +2027,34 @@ createToggle(SettingsPage, "Bind Island", true, 3, function(v, silent)
     State.BindIsland = v
     refreshIsland()
     if silent then return end
-    notify("Bind Island: " .. (v and "ON" or "OFF"))
 end, "BindIsland")
+createToggle(SettingsPage, "Logs", true, 4, function(v, silent)
+    State.Logs = v
+    if not v then clearLogs() end
+end, "Logs")
 
-createSection(SettingsPage, "Keybinds", 4)
+createSection(SettingsPage, "Keybinds", 5)
 do
-    local info = glassRow(SettingsPage, 5, 54)
+    local info = glassRow(SettingsPage, 6, 54)
     local t = new("TextLabel", {
         Size = UDim2.new(1, -28, 1, 0), Position = UDim2.fromOffset(14, 0), BackgroundTransparency = 1,
-        Text = "Middle-click any toggle, then press a key to bind it. Esc clears the bind. Binds work while the menu is closed.",
+        Text = "Middle-click any toggle, then press a key (or Mouse4 / Mouse5) to bind it. Esc clears the bind. Binds work while the menu is closed.",
         TextColor3 = C.TextDim, TextSize = 11, TextWrapped = true,
         TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 4, Active = false,
     }, info)
     fontReg(t)
 end
-createButton(SettingsPage, "Clear All Binds", 6, clearAllBinds, true)
+createButton(SettingsPage, "Clear All Binds", 7, clearAllBinds, true)
 
-createSection(SettingsPage, "Server", 7)
-createButton(SettingsPage, "Server Hop", 8, serverHop)
-createButton(SettingsPage, "Rejoin", 9, rejoin)
+createSection(SettingsPage, "Server", 8)
+createButton(SettingsPage, "Server Hop", 9, serverHop)
+createButton(SettingsPage, "Rejoin", 10, rejoin)
 
-createSection(SettingsPage, "Config", 10)
-createButton(SettingsPage, "Save Config", 11, saveConfig)
-createButton(SettingsPage, "Load Config", 12, loadConfig)
-createButton(SettingsPage, "Reset Config (defaults)", 13, resetConfig)
-createButton(SettingsPage, "Delete Config File", 14, deleteConfig, true)
+createSection(SettingsPage, "Config", 11)
+createButton(SettingsPage, "Save Config", 12, saveConfig)
+createButton(SettingsPage, "Load Config", 13, loadConfig)
+createButton(SettingsPage, "Reset Config (defaults)", 14, resetConfig)
+createButton(SettingsPage, "Delete Config File", 15, deleteConfig, true)
 
 -- ==================== ESP ====================
 local ESPFolder = new("Folder", { Name = "AbaddonESP" }, ScreenGui)
@@ -2057,7 +2243,7 @@ local function setOpen(open)
     if not open then cancelBinding() end
     openToken = openToken + 1
     local myToken = openToken
-    pushLog("Menu " .. (open and "opened" or "closed"), "info")
+    if crosshairRoot then crosshairRoot.Visible = not open end
 
     if open then
         Panel.Visible, Overlay.Visible, Grid.Visible = true, true, true
@@ -2153,12 +2339,11 @@ end
 
 -- ==================== CHARACTER HOOKS ====================
 LocalPlayer.CharacterAdded:Connect(function(char)
-    pushLog("Character loaded", "info")
+    task.spawn(hookWalkSpeed, char)
     task.wait(0.4)
     local hum = char:FindFirstChildOfClass("Humanoid")
     if hum then
         hum.WalkSpeed = State.WalkSpeed
-        if State.HipHeight and State.HipHeight ~= 0 then hum.HipHeight = State.HipHeight end
         hum.PlatformStand = false
     end
     if State.Noclip then setNoclip(true) end
@@ -2172,10 +2357,6 @@ LocalPlayer.CharacterAdded:Connect(function(char)
             end
         end)
     end
-end)
-
-LocalPlayer.CharacterRemoving:Connect(function()
-    pushLog("Character unloading", "warn")
 end)
 
 -- ==================== BOOT ====================
