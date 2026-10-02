@@ -1320,6 +1320,8 @@ local FunPage       = createTab("Fun",       5)
 local SettingsPage  = createTab("Settings",  6)
 setActiveTab("Visuals")
 
+local function PartTwo()
+    
 -- ==================== HELPERS: roles / objects ====================
 local function roleOf(plr)
     local t = plr.Team and plr.Team.Name:lower() or ""
@@ -2206,6 +2208,8 @@ local function unspectate()
         pushLog("Spectate stopped", "info")
     end
 end
+
+local function PartThree()
 
 -- ==================== COSMETICS: shared helpers ====================
 local function cs(...)
@@ -3315,3 +3319,8 @@ end)
 
 notify("Abaddon loaded · RightShift")
 pushLog("Abaddon loaded successfully", "success")
+
+end
+PartThree()
+end
+PartTwo()
