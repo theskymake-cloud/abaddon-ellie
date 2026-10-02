@@ -1,3 +1,5 @@
+-- abaddon beta
+
 local Players             = game:GetService("Players")
 local RunService          = game:GetService("RunService")
 local UserInputService    = game:GetService("UserInputService")
@@ -8,6 +10,8 @@ local GuiService          = game:GetService("GuiService")
 local VirtualUser         = game:GetService("VirtualUser")
 local TeleportService     = game:GetService("TeleportService")
 local HttpService         = game:GetService("HttpService")
+local SoundService        = game:GetService("SoundService")
+local Debris              = game:GetService("Debris")
 
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui   = LocalPlayer:WaitForChild("PlayerGui")
@@ -18,21 +22,29 @@ if _G.AbaddonGui then pcall(function() _G.AbaddonGui:Destroy() end) end
 if _G.ASC_MainLoop then pcall(function() _G.ASC_MainLoop:Disconnect() end) end
 _G.ASC_MainLoop = nil
 
--- leftover blur from the old glass version
-local oldBlur = Lighting:FindFirstChild("AbaddonBlur")
-if oldBlur then pcall(function() oldBlur:Destroy() end) end
+-- leftovers from old versions
+for _, n in ipairs({ "AbaddonBlur", "AbaddonSandyCC", "AbaddonSandyBlur" }) do
+    local o = Lighting:FindFirstChild(n)
+    if o then pcall(function() o:Destroy() end) end
+end
 
-local Conns = {}
+local Conns, Cleanups = {}, {}
 local function track(c) Conns[#Conns + 1] = c return c end
+local function onCleanup(fn) Cleanups[#Cleanups + 1] = fn end
 _G.AbaddonCleanup = function()
     for _, c in ipairs(Conns) do pcall(function() c:Disconnect() end) end
     Conns = {}
+    for _, fn in ipairs(Cleanups) do pcall(fn) end
+    Cleanups = {}
     if _G.AbaddonFakeLagStop then pcall(_G.AbaddonFakeLagStop) end
     if _G.AbaddonRestoreCollide then pcall(_G.AbaddonRestoreCollide) end
 end
 
 local KEY_TOGGLE  = Enum.KeyCode.RightShift
 local SPIN_SPEED  = 720
+local SANDY_SPEED = 22
+local SANDY_SOUND = "rbxassetid://128482950258388"
+local CROSSHAIR_X = -38 -- ~1 cm to the left (96 dpi)
 local CONFIG_FILE = "Abaddon_config.json"
 
 -- ==================== PERSISTENT PARENT ====================
@@ -76,12 +88,21 @@ local State = {
     ESP_Survivors  = false,
     ESP_Killer     = false,
     ESP_Generators = false,
+    ESP_Hooks      = false,
+    ESP_Pallets    = false,
+    ESP_Gates      = false,
+    ESP_Info       = false,
+    Tracers        = false,
     Fullbright     = false,
     NoShadows      = false,
     NoTextures     = false,
     CustomTime     = false,
     AutoSkillCheck = false,
     AntiAFK        = false,
+    KillerAlert    = false,
+    AlertRange     = 60,
+    Radar          = false,
+    RadarRange     = 120,
     WalkSpeed      = 16,
     WalkSpeedLock  = true,
     Noclip         = false,
@@ -92,6 +113,9 @@ local State = {
     FlySpeed       = 60,
     AntiFling      = false,
     CameraFOV      = 70,
+    ThirdPerson    = false,
+    ShiftLock      = true,
+    MaxZoom        = 128,
     ClockTime      = 14,
     Hoodwink       = false,
     HideUsername   = false,
@@ -101,6 +125,11 @@ local State = {
     CrosshairSize  = 10,
     FakeLag        = false,
     FakeLagTime    = 200,
+    Sandevistan    = false,
+    Halo           = false,
+    HaloColorHex   = "FFD76A",
+    Trail          = false,
+    TrailStyle     = "Default",
     ESP_SurvivorColorHex  = "8CB4DC",
     ESP_KillerColorHex    = "C85555",
     ESP_GeneratorColorHex = "8CC89B",
@@ -136,7 +165,6 @@ local ESPColors = {
 }
 
 -- ==================== FONTS ====================
--- Change FONT here if you want another typeface (Enum.Font.Arial, Enum.Font.SourceSans, Enum.Font.Ubuntu...)
 local FONT = Enum.Font.Code
 local function fontReg(o)  o.Font = FONT end
 local function fontMed(o)  o.Font = FONT end
@@ -150,7 +178,6 @@ local function new(class, props, parent)
     return o
 end
 
--- strict style: no rounded corners anywhere
 local function corner() end
 
 local function stroke(p, col, th)
@@ -160,7 +187,6 @@ local function stroke(p, col, th)
     }, p)
 end
 
--- slight vertical shading (multiplies the base color)
 local function gloss(p, b)
     return new("UIGradient", {
         Rotation = 90, Color = ColorSequence.new(C.White, b or Color3.fromRGB(150, 150, 150)),
@@ -174,7 +200,6 @@ local function rule(parent, pos, size, col)
     }, parent)
 end
 
--- the famous gamesense cyan -> purple -> yellow top line
 local function topGradient(parent, h)
     local f = new("Frame", {
         Name = "TopLine", Size = UDim2.new(1, 0, 0, h or 2), BackgroundColor3 = C.White,
@@ -227,7 +252,6 @@ local function resolveImageUrl(url)
     return url
 end
 
--- dim overlay
 local Overlay = new("Frame", {
     Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.new(0, 0, 0),
     BackgroundTransparency = 1, BorderSizePixel = 0, Visible = false, ZIndex = 10,
@@ -252,7 +276,6 @@ local Body = new("Frame", {
 stroke(Body, C.Black)
 topGradient(Body, 2)
 
--- ---- Top bar (drag area)
 local TopBar = new("Frame", {
     Position = UDim2.fromOffset(0, 2), Size = UDim2.new(1, 0, 0, 26),
     BackgroundTransparency = 1, Active = true, ZIndex = 5,
@@ -292,7 +315,6 @@ end)
 rule(Body, UDim2.fromOffset(0, 28), UDim2.new(1, 0, 0, 1), C.Black)
 rule(Body, UDim2.fromOffset(0, 29), UDim2.new(1, 0, 0, 1), C.Border)
 
--- ---- Sidebar
 local Sidebar = new("Frame", {
     Size = UDim2.new(0, SB_W, 1, -30), Position = UDim2.fromOffset(0, 30),
     BackgroundColor3 = C.Side, BorderSizePixel = 0, ZIndex = 2,
@@ -306,7 +328,6 @@ local TabList = new("Frame", {
 }, Sidebar)
 new("UIListLayout", { Padding = UDim.new(0, 2), SortOrder = Enum.SortOrder.LayoutOrder }, TabList)
 
--- profile card
 local Card = new("Frame", {
     Size = UDim2.new(1, -14, 0, 38), Position = UDim2.new(0, 6, 1, -46),
     BackgroundColor3 = C.Bg, BorderSizePixel = 0, ZIndex = 3,
@@ -490,7 +511,6 @@ local function setHoodwink(on)
 end
 
 -- ==================== KEYBINDS + BIND ISLAND ====================
--- Middle-click a toggle -> press a key. Esc clears the bind.
 local BindList, Binding = {}, nil
 local ISL_W = 230
 
@@ -644,8 +664,6 @@ track(UserInputService.InputBegan:Connect(function(input, processed)
     end
 end))
 
--- Roblox does not expose Mouse4 / Mouse5 through UserInputService,
--- so we poll the OS button state (VK_XBUTTON1 = 0x05, VK_XBUTTON2 = 0x06).
 local MOUSE_EXTRA = { M4 = 0x05, M5 = 0x06 }
 local mouseExtraDown = { M4 = false, M5 = false }
 
@@ -686,8 +704,8 @@ end))
 
 -- ==================== TAB SYSTEM ====================
 local Tabs, Pages = {}, {}
-local pageCols = {}   -- page -> { L, R, hL, hR }
-local groupOf  = {}   -- page -> { box, col }
+local pageCols = {}
+local groupOf  = {}
 
 local function setActiveTab(name)
     for n, t in pairs(Tabs) do
@@ -762,7 +780,6 @@ end
 -- ==================== WIDGETS ====================
 local ROW, BODY = 20, 112
 
--- a transparent row inside the current groupbox of the page
 local function glassRow(parent, order, h)
     local g = groupOf[parent]
     local tgt = g and g.box or parent
@@ -781,7 +798,6 @@ local function hoverLabel(hit, lbl)
     hit.MouseLeave:Connect(function() tween(lbl, 0.1, { TextColor3 = C.Text }) end)
 end
 
--- groupbox with the title cutting through the border
 local function createSection(parent, text, order)
     local pc = pageCols[parent]
     local colKey = (pc.hL <= pc.hR) and "hL" or "hR"
@@ -817,37 +833,54 @@ local function createSection(parent, text, order)
     return outer
 end
 
--- ---------- Color wheel (HSV) ----------
+-- ---------- Color wheel (HSV) — fixed ----------
+-- Every strip is a full-diameter bar rotated around the wheel center.
+-- Its top half shows hue(rot), the bottom half shows hue(rot+180), the middle is white.
 local function buildPicker(container, startColor, onChange)
     local api = {}
     local h, s, v = startColor:ToHSV()
     local SIZE = 96
     local R = SIZE / 2
 
-    local wheel = new("Frame", {
+    local holder = new("Frame", {
         Size = UDim2.fromOffset(SIZE, SIZE), Position = UDim2.fromOffset(8, 8),
         BackgroundTransparency = 1, ZIndex = 4,
     }, container)
 
-    local STRIPS = 90
-    local w = math.ceil(2 * math.pi * R / STRIPS) + 2
+    local wheel = new("CanvasGroup", {
+        Size = UDim2.fromScale(1, 1), BackgroundColor3 = C.White, BorderSizePixel = 0, ZIndex = 4,
+    }, holder)
+    new("UICorner", { CornerRadius = UDim.new(0.5, 0) }, wheel)
+    stroke(wheel, C.Black)
+
+    local STRIPS = 120
     for i = 0, STRIPS - 1 do
-        local rot = i * 360 / STRIPS
+        local rot = i * 180 / STRIPS
         local st = new("Frame", {
-            AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.fromScale(0.5, 0.5),
-            Size = UDim2.fromOffset(w, R), Rotation = rot,
+            AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+            Size = UDim2.fromOffset(4, SIZE + 2), Rotation = rot,
             BackgroundColor3 = C.White, BorderSizePixel = 0, ZIndex = 4, Active = false,
         }, wheel)
         new("UIGradient", {
             Rotation = 90,
-            Color = ColorSequence.new(Color3.fromHSV(rot / 360, 1, 1), C.White),
+            Color = ColorSequence.new({
+                ColorSequenceKeypoint.new(0,   Color3.fromHSV(rot / 360, 1, 1)),
+                ColorSequenceKeypoint.new(0.5, C.White),
+                ColorSequenceKeypoint.new(1,   Color3.fromHSV(((rot + 180) % 360) / 360, 1, 1)),
+            }),
         }, st)
     end
+
+    -- brightness shade (darkens the wheel when V < 1)
+    local shade = new("Frame", {
+        Size = UDim2.fromScale(1, 1), BackgroundColor3 = C.Black, BackgroundTransparency = 1,
+        BorderSizePixel = 0, ZIndex = 5, Active = false,
+    }, wheel)
 
     local marker = new("Frame", {
         Size = UDim2.fromOffset(8, 8), AnchorPoint = Vector2.new(0.5, 0.5),
         BackgroundColor3 = C.White, BorderSizePixel = 0, ZIndex = 6, Active = false,
-    }, wheel)
+    }, holder)
     stroke(marker, C.Black)
 
     local prev = new("Frame", {
@@ -898,6 +931,7 @@ local function buildPicker(container, startColor, onChange)
         marker.Position = UDim2.new(0.5, R * s * math.sin(a), 0.5, -R * s * math.cos(a))
         marker.BackgroundColor3 = col
         prev.BackgroundColor3 = col
+        shade.BackgroundTransparency = v
         hexBox.Text = "#" .. color3ToHex(col)
         vGrad.Color = ColorSequence.new(Color3.new(0, 0, 0), Color3.fromHSV(h, s, 1))
         vKnob.Position = UDim2.new(v, 0, 0.5, 0)
@@ -906,7 +940,7 @@ local function buildPicker(container, startColor, onChange)
 
     local wheelHit = new("TextButton", {
         Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Text = "", AutoButtonColor = false, ZIndex = 8,
-    }, wheel)
+    }, holder)
     local vHit = new("TextButton", {
         Size = UDim2.new(1, 0, 0, 22), Position = UDim2.fromOffset(0, -7), BackgroundTransparency = 1,
         Text = "", AutoButtonColor = false, ZIndex = 8,
@@ -915,7 +949,7 @@ local function buildPicker(container, startColor, onChange)
     local dragWheel, dragV = false, false
 
     local function wheelFrom(pos)
-        local c = wheel.AbsolutePosition + wheel.AbsoluteSize / 2
+        local c = holder.AbsolutePosition + holder.AbsoluteSize / 2
         local dx, dy = pos.X - c.X, pos.Y - c.Y
         local dist = math.sqrt(dx * dx + dy * dy)
         s = math.clamp(dist / R, 0, 1)
@@ -994,7 +1028,6 @@ local function createToggle(parent, label, default, order, callback, stateKey, c
     hoverLabel(hit, lbl)
     hit.MouseButton1Click:Connect(function() update(not isOn) end)
 
-    -- keybind: middle-click to bind
     local badge = new("TextLabel", {
         Size = UDim2.fromOffset(56, ROW), AnchorPoint = Vector2.new(1, 0),
         Position = UDim2.new(1, colorOpt and -28 or -2, 0, 0), BackgroundTransparency = 1,
@@ -1025,7 +1058,6 @@ local function createToggle(parent, label, default, order, callback, stateKey, c
         if input.UserInputType == Enum.UserInputType.MouseButton3 then startBinding(entry) end
     end)
 
-    -- color wheel
     if colorOpt then
         local currentColor = hexToColor3(colorOpt.hex) or C.Accent
         local picker, expanded = nil, false
@@ -1162,6 +1194,47 @@ local function createTextAction(parent, label, placeholder, order, callback)
     return box
 end
 
+-- ---------- Selector (LMB = next, RMB = previous) ----------
+local function createSelector(parent, label, options, default, order, callback, stateKey)
+    local row = glassRow(parent, order, 22)
+    local lbl = new("TextLabel", {
+        Size = UDim2.new(1, -112, 1, 0), BackgroundTransparency = 1,
+        Text = label, TextColor3 = C.Text, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left,
+        TextTruncate = Enum.TextTruncate.AtEnd, Active = false, ZIndex = 4,
+    }, row)
+    fontMed(lbl)
+
+    local idx = table.find(options, default) or 1
+    local btn = new("TextButton", {
+        Size = UDim2.fromOffset(106, 18), Position = UDim2.new(1, -106, 0.5, -9),
+        BackgroundColor3 = C.Field, Text = "< " .. options[idx] .. " >",
+        TextColor3 = C.Accent, TextSize = 10, AutoButtonColor = false, BorderSizePixel = 0, ZIndex = 6,
+    }, row)
+    stroke(btn, C.Black)
+    gloss(btn, Color3.fromRGB(170, 170, 170))
+    fontMed(btn)
+    btn.MouseEnter:Connect(function() tween(btn, 0.1, { BackgroundColor3 = C.FieldHov }) end)
+    btn.MouseLeave:Connect(function() tween(btn, 0.1, { BackgroundColor3 = C.Field }) end)
+
+    local function setIdx(i, silent)
+        idx = ((i - 1) % #options) + 1
+        btn.Text = "< " .. options[idx] .. " >"
+        if callback then callback(options[idx], silent) end
+    end
+    btn.MouseButton1Click:Connect(function() setIdx(idx + 1, false) end)
+    btn.MouseButton2Click:Connect(function() setIdx(idx - 1, false) end)
+
+    local widget = {
+        Set = function(val)
+            local i = table.find(options, val)
+            if i then setIdx(i, true) end
+        end,
+        Get = function() return options[idx] end,
+    }
+    if stateKey then widgetRegistry[stateKey] = widget end
+    return widget
+end
+
 local function createSlider(parent, label, min, max, default, order, callback, onRelease, stateKey)
     default = math.clamp(default or min, min, max)
     local row = glassRow(parent, order, 32)
@@ -1241,12 +1314,54 @@ local function createSlider(parent, label, min, max, default, order, callback, o
 end
 
 -- ==================== PAGES (categories) ====================
-local VisualPage   = createTab("Visuals",  1)
-local MainPage     = createTab("Main",     2)
-local MovementPage = createTab("Movement", 3)
-local FunPage      = createTab("Fun",      4)
-local SettingsPage = createTab("Settings", 5)
+local VisualPage    = createTab("Visuals",   1)
+local MainPage      = createTab("Main",      2)
+local MovementPage  = createTab("Movement",  3)
+local CosmeticsPage = createTab("Cosmetics", 4)
+local FunPage       = createTab("Fun",       5)
+local SettingsPage  = createTab("Settings",  6)
 setActiveTab("Visuals")
+
+local function PartTwo()
+    
+-- ==================== HELPERS: roles / objects ====================
+local function roleOf(plr)
+    local t = plr.Team and plr.Team.Name:lower() or ""
+    if t:find("killer") then return "killer" end
+    if t:find("survivor") then return "survivor" end
+    return nil
+end
+
+local function myRoot()
+    local c = LocalPlayer.Character
+    return c and c:FindFirstChild("HumanoidRootPart")
+end
+
+local OBJ_DEFS = {
+    { key = "ESP_Generators", id = "gen",    pat = { "generator" } },
+    { key = "ESP_Hooks",      id = "hook",   pat = { "hook" } },
+    { key = "ESP_Pallets",    id = "pallet", pat = { "pallet" } },
+    { key = "ESP_Gates",      id = "gate",   pat = { "gate", "exit" } },
+}
+local ObjectsFound = { gen = {}, hook = {}, pallet = {}, gate = {} }
+
+local function collectObjects()
+    local out = { gen = {}, hook = {}, pallet = {}, gate = {} }
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("Model") and not Players:GetPlayerFromCharacter(obj) then
+            local nm = obj.Name:lower()
+            for _, d in ipairs(OBJ_DEFS) do
+                local hit = false
+                for _, p in ipairs(d.pat) do
+                    if nm:find(p, 1, true) then hit = true break end
+                end
+                if hit then out[d.id][#out[d.id] + 1] = obj break end
+            end
+        end
+    end
+    ObjectsFound = out
+    return out
+end
 
 -- ==================== FEATURE LOGIC ====================
 local fbCache
@@ -1278,7 +1393,7 @@ local function setNoShadows(on)
         for _, obj in ipairs(Lighting:GetDescendants()) do
             if obj:IsA("BloomEffect") or obj:IsA("BlurEffect") or obj:IsA("ColorCorrectionEffect")
             or obj:IsA("SunRaysEffect") or obj:IsA("DepthOfFieldEffect") then
-                if obj.Enabled then
+                if obj.Enabled and obj.Name ~= "AbaddonSandyCC" then
                     noShadowCache.Effects[obj] = { kind = "enabled" }
                     obj.Enabled = false
                 end
@@ -1438,12 +1553,16 @@ local function setNoclip(on)
     end))
 end
 
--- ==================== WALKSPEED LOCK ====================
+-- ==================== WALKSPEED LOCK (+ Sandevistan lock) ====================
 local wsHumConn
 local function enforceWalkSpeed(hum)
-    if State.WalkSpeedLock and State.WalkSpeed ~= 16 and hum and hum.WalkSpeed ~= State.WalkSpeed then
-        hum.WalkSpeed = State.WalkSpeed
+    local target
+    if State.Sandevistan then
+        target = SANDY_SPEED
+    elseif State.WalkSpeedLock and State.WalkSpeed ~= 16 then
+        target = State.WalkSpeed
     end
+    if target and hum and hum.WalkSpeed ~= target then hum.WalkSpeed = target end
 end
 
 track(RunService.Stepped:Connect(function()
@@ -1500,7 +1619,7 @@ _G.AbaddonFakeLagStop = function()
     setOutLimit(math.huge)
 end
 
--- ==================== CROSSHAIR ====================
+-- ==================== CROSSHAIR (shifted 1 cm left) ====================
 local crosshairRoot
 local function buildCrosshair()
     if crosshairRoot then crosshairRoot:Destroy() crosshairRoot = nil end
@@ -1509,7 +1628,7 @@ local function buildCrosshair()
     local gap, thick = 4, 2
     local root = new("Frame", {
         Name = "AbaddonCrosshair", Size = UDim2.fromOffset(0, 0),
-        Position = UDim2.fromScale(0.5, 0.5), AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.new(0.5, CROSSHAIR_X, 0.5, 0), AnchorPoint = Vector2.new(0.5, 0.5),
         BackgroundTransparency = 1, ZIndex = 500, Active = false, Visible = not State.Open,
     }, ScreenGui)
     local function bar(w, h, x, y)
@@ -1519,10 +1638,10 @@ local function buildCrosshair()
         }, root)
         new("UIStroke", { Color = Color3.new(0, 0, 0), Thickness = 1, Transparency = 0.3 }, f)
     end
-    bar(thick, len, -thick / 2, -gap - len)  -- top
-    bar(thick, len, -thick / 2, gap)         -- bottom
-    bar(len, thick, -gap - len, -thick / 2)  -- left
-    bar(len, thick, gap, -thick / 2)         -- right
+    bar(thick, len, -thick / 2, -gap - len)
+    bar(thick, len, -thick / 2, gap)
+    bar(len, thick, -gap - len, -thick / 2)
+    bar(len, thick, gap, -thick / 2)
     crosshairRoot = root
 end
 
@@ -1638,6 +1757,61 @@ local function setCameraFOV(value)
     if cam then cam.FieldOfView = value end
 end
 
+-- ==================== FORCE THIRD PERSON + SHIFTLOCK ====================
+local shiftApplied = false
+local function releaseShiftLock()
+    if not shiftApplied then return end
+    shiftApplied = false
+    UserInputService.MouseBehavior = Enum.MouseBehavior.Default
+    local c = LocalPlayer.Character
+    local hum = c and c:FindFirstChildOfClass("Humanoid")
+    if hum then
+        hum.CameraOffset = Vector3.zero
+        if not State.Spin and not State.BackWalk and not State.Fly then hum.AutoRotate = true end
+    end
+end
+
+local function setThirdPerson(on)
+    State.ThirdPerson = on
+    if not on then
+        releaseShiftLock()
+        pcall(function()
+            LocalPlayer.CameraMinZoomDistance = 0.5
+            LocalPlayer.CameraMaxZoomDistance = 128
+        end)
+    end
+end
+
+track(RunService.RenderStepped:Connect(function()
+    if not State.ThirdPerson then return end
+    pcall(function()
+        LocalPlayer.CameraMode = Enum.CameraMode.Classic
+        LocalPlayer.CameraMinZoomDistance = 8
+        LocalPlayer.CameraMaxZoomDistance = math.max(State.MaxZoom, 12)
+    end)
+
+    local c = LocalPlayer.Character
+    local hum = c and c:FindFirstChildOfClass("Humanoid")
+    local hrp = c and c:FindFirstChild("HumanoidRootPart")
+    local wc = workspace.CurrentCamera
+    if not State.ShiftLock or State.Open or not hum or not hrp or not wc
+        or hum.Health <= 0 or hum.Sit or hum.PlatformStand
+        or State.Fly or State.Spin or State.BackWalk
+        or wc.CameraSubject ~= hum then
+        releaseShiftLock()
+        return
+    end
+
+    shiftApplied = true
+    UserInputService.MouseBehavior = Enum.MouseBehavior.LockCenter
+    hum.AutoRotate = false
+    hum.CameraOffset = Vector3.new(1.75, 0, 0)
+    local look = wc.CFrame.LookVector
+    hrp.CFrame = CFrame.new(hrp.Position) * CFrame.Angles(0, math.atan2(-look.X, -look.Z), 0)
+end))
+onCleanup(function() setThirdPerson(false) end)
+
+-- ==================== FLY ====================
 local flyBodyVel, flyBodyGyro, flyConn
 local flyKeys = { W = false, A = false, S = false, D = false, Space = false, LCtrl = false }
 
@@ -1724,7 +1898,6 @@ local function setAntiFling(on)
     end)
 end
 
--- lock the time only while Custom Time is enabled
 track(RunService.Heartbeat:Connect(function()
     if State.CustomTime and Lighting.ClockTime ~= State.ClockTime then
         Lighting.ClockTime = State.ClockTime
@@ -1754,6 +1927,793 @@ local function rejoin()
     pushLog("Rejoin...", "info")
     TeleportService:Teleport(game.PlaceId, LocalPlayer)
 end
+
+-- ==================== GAMEPLAY: tracers ====================
+local tracerLines = {}
+local tracerWidget
+
+local function clearTracers()
+    for p, l in pairs(tracerLines) do
+        pcall(function() l:Remove() end)
+        tracerLines[p] = nil
+    end
+end
+onCleanup(clearTracers)
+
+local function setTracers(on)
+    State.Tracers = on
+    if on and not (Drawing and Drawing.new) then
+        pushLog("Tracers: Drawing API not supported by this executor", "error")
+        State.Tracers = false
+        if tracerWidget then task.defer(function() tracerWidget.Set(false) end) end
+        return
+    end
+    if not on then clearTracers() end
+end
+
+Players.PlayerRemoving:Connect(function(plr)
+    local l = tracerLines[plr]
+    if l then pcall(function() l:Remove() end) tracerLines[plr] = nil end
+end)
+
+track(RunService.RenderStepped:Connect(function()
+    if not State.Tracers then return end
+    if not (Drawing and Drawing.new) then return end
+    local c = workspace.CurrentCamera
+    if not c then return end
+    local vs = c.ViewportSize
+    local origin = Vector2.new(vs.X / 2, vs.Y)
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer then
+            local role = roleOf(plr)
+            local hrp = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
+            local ln = tracerLines[plr]
+            if hrp and role then
+                if not ln then
+                    local ok, l = pcall(function()
+                        local x = Drawing.new("Line")
+                        x.Thickness = 1.5
+                        x.Transparency = 1
+                        return x
+                    end)
+                    if ok then ln = l tracerLines[plr] = l end
+                end
+                if ln then
+                    local sp, onScreen = c:WorldToViewportPoint(hrp.Position)
+                    if onScreen and sp.Z > 0 then
+                        ln.From = origin
+                        ln.To = Vector2.new(sp.X, sp.Y)
+                        ln.Color = role == "killer" and ESPColors.Killer or ESPColors.Survivor
+                        ln.Visible = true
+                    else
+                        ln.Visible = false
+                    end
+                end
+            elseif ln then
+                ln.Visible = false
+            end
+        end
+    end
+end))
+
+-- ==================== GAMEPLAY: killer alert ====================
+local AlertLbl = new("TextLabel", {
+    Name = "AbaddonAlert", Size = UDim2.fromOffset(260, 22), Position = UDim2.new(0.5, 0, 0, 44),
+    AnchorPoint = Vector2.new(0.5, 0), BackgroundColor3 = C.Bg, BorderSizePixel = 0,
+    Text = "", TextColor3 = C.Red, TextSize = 12, Visible = false, ZIndex = 270, Active = false,
+}, ScreenGui)
+stroke(AlertLbl, C.Red)
+fontBold(AlertLbl)
+
+local lastAlertLog = 0
+task.spawn(function()
+    while ScreenGui.Parent do
+        local show = false
+        if State.KillerAlert and roleOf(LocalPlayer) ~= "killer" then
+            local me = myRoot()
+            if me then
+                local best
+                for _, plr in ipairs(Players:GetPlayers()) do
+                    if plr ~= LocalPlayer and roleOf(plr) == "killer" then
+                        local hrp = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
+                        if hrp then
+                            local d = (hrp.Position - me.Position).Magnitude
+                            if not best or d < best then best = d end
+                        end
+                    end
+                end
+                if best and best <= State.AlertRange then
+                    show = true
+                    AlertLbl.Text = string.format("! KILLER NEARBY  %d studs !", math.floor(best))
+                    if os.clock() - lastAlertLog > 3 then
+                        lastAlertLog = os.clock()
+                        pushLog("Killer nearby!", "error")
+                    end
+                end
+            end
+        end
+        AlertLbl.Visible = show
+        task.wait(0.2)
+    end
+end)
+
+-- ==================== GAMEPLAY: radar ====================
+local RADAR_SIZE = 150
+local RadarFrame = new("Frame", {
+    Name = "AbaddonRadar", Size = UDim2.fromOffset(RADAR_SIZE, RADAR_SIZE),
+    Position = UDim2.new(0, 12, 1, -(RADAR_SIZE + 20)),
+    BackgroundColor3 = C.Bg, BackgroundTransparency = 0.15, BorderSizePixel = 0,
+    ClipsDescendants = true, Visible = false, ZIndex = 250,
+}, ScreenGui)
+stroke(RadarFrame, C.Black)
+topGradient(RadarFrame, 2)
+new("Frame", {
+    Size = UDim2.new(1, 0, 0, 1), Position = UDim2.new(0, 0, 0.5, 0), BackgroundColor3 = C.Border,
+    BorderSizePixel = 0, ZIndex = 251, Active = false,
+}, RadarFrame)
+new("Frame", {
+    Size = UDim2.new(0, 1, 1, 0), Position = UDim2.new(0.5, 0, 0, 0), BackgroundColor3 = C.Border,
+    BorderSizePixel = 0, ZIndex = 251, Active = false,
+}, RadarFrame)
+new("Frame", {
+    Size = UDim2.fromOffset(5, 5), AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+    BackgroundColor3 = C.White, BorderSizePixel = 0, ZIndex = 265, Active = false,
+}, RadarFrame)
+
+local radarDots = {}
+local function getDot(i)
+    local d = radarDots[i]
+    if not d then
+        d = new("Frame", {
+            AnchorPoint = Vector2.new(0.5, 0.5), BorderSizePixel = 0, ZIndex = 262, Active = false,
+        }, RadarFrame)
+        radarDots[i] = d
+    end
+    return d
+end
+
+local radarT = 0
+track(RunService.RenderStepped:Connect(function(dt)
+    if not State.Radar then
+        if RadarFrame.Visible then RadarFrame.Visible = false end
+        return
+    end
+    RadarFrame.Visible = true
+    radarT = radarT + dt
+    if radarT < 0.03 then return end
+    radarT = 0
+
+    local c = workspace.CurrentCamera
+    local me = myRoot()
+    if not c or not me then return end
+    local look = c.CFrame.LookVector
+    local m = math.sqrt(look.X * look.X + look.Z * look.Z)
+    if m < 0.001 then return end
+    local fx, fz = look.X / m, look.Z / m
+    local rx, rz = -fz, fx
+    local half = RADAR_SIZE / 2
+    local range = math.max(State.RadarRange, 10)
+    local n = 0
+
+    local function plot(pos, col, clamp, size)
+        local dx, dz = pos.X - me.Position.X, pos.Z - me.Position.Z
+        local px = (dx * rx + dz * rz) / range * half
+        local py = -(dx * fx + dz * fz) / range * half
+        local dist = math.sqrt(px * px + py * py)
+        if dist > half - 4 then
+            if not clamp then return end
+            px, py = px / dist * (half - 4), py / dist * (half - 4)
+        end
+        n = n + 1
+        local d = getDot(n)
+        d.Visible = true
+        d.Position = UDim2.new(0.5, px, 0.5, py)
+        d.Size = UDim2.fromOffset(size, size)
+        d.BackgroundColor3 = col
+    end
+
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer then
+            local role = roleOf(plr)
+            local hrp = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
+            if role and hrp then
+                if role == "killer" then plot(hrp.Position, ESPColors.Killer, true, 6)
+                else plot(hrp.Position, ESPColors.Survivor, false, 5) end
+            end
+        end
+    end
+    for _, g in ipairs(ObjectsFound.gen) do
+        if g.Parent then plot(g:GetPivot().Position, ESPColors.Generator, false, 4) end
+    end
+    for i = n + 1, #radarDots do radarDots[i].Visible = false end
+end))
+
+-- ==================== GAMEPLAY: quick teleports ====================
+local function tpTo(pos, label)
+    local hrp = myRoot()
+    if not hrp then pushLog("Character not loaded", "error") return end
+    hrp.CFrame = CFrame.new(pos + Vector3.new(0, 4, 0))
+    pushLog("Teleported: " .. label, "success")
+end
+
+local function nearestOf(list)
+    local me = myRoot()
+    if not me then return nil end
+    local best, bd
+    for _, o in ipairs(list) do
+        if o.Parent then
+            local p = o:GetPivot().Position
+            local d = (p - me.Position).Magnitude
+            if not bd or d < bd then best, bd = p, d end
+        end
+    end
+    return best
+end
+
+local function tpNearestGen()
+    local p = nearestOf(collectObjects().gen)
+    if p then tpTo(p, "nearest generator") else pushLog("No generators found", "warn") end
+end
+
+local function tpNearestGate()
+    local p = nearestOf(collectObjects().gate)
+    if p then tpTo(p, "exit gate") else pushLog("No gates found", "warn") end
+end
+
+local function tpSafeSpot()
+    local objs = collectObjects()
+    local killers = {}
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer and roleOf(plr) == "killer" then
+            local hrp = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
+            if hrp then killers[#killers + 1] = hrp.Position end
+        end
+    end
+    if #killers == 0 then pushLog("No killer found", "warn") return end
+    local bestPos, bestScore
+    for _, g in ipairs(objs.gen) do
+        if g.Parent then
+            local p = g:GetPivot().Position
+            local minD
+            for _, kp in ipairs(killers) do
+                local d = (kp - p).Magnitude
+                if not minD or d < minD then minD = d end
+            end
+            if not bestScore or minD > bestScore then bestPos, bestScore = p, minD end
+        end
+    end
+    if bestPos then tpTo(bestPos, "far from killer") else pushLog("No generators found", "warn") end
+end
+
+-- ==================== GAMEPLAY: spectate ====================
+local function spectate(name)
+    if not name or name == "" then pushLog("Enter a nickname to spectate", "warn") return end
+    name = name:lower()
+    local found
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer and plr.Name:lower():sub(1, #name) == name then found = plr break end
+    end
+    if not found then pushLog("Player not found: " .. name, "error") return end
+    local hum = found.Character and found.Character:FindFirstChildOfClass("Humanoid")
+    if hum and workspace.CurrentCamera then
+        workspace.CurrentCamera.CameraSubject = hum
+        pushLog("Spectating " .. found.Name, "success")
+    else
+        pushLog("Target not loaded yet", "error")
+    end
+end
+
+local function unspectate()
+    local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+    if hum and workspace.CurrentCamera then
+        workspace.CurrentCamera.CameraSubject = hum
+        pushLog("Spectate stopped", "info")
+    end
+end
+
+local function PartThree()
+
+-- ==================== COSMETICS: shared helpers ====================
+local function cs(...)
+    local args, kps = { ... }, {}
+    for i, c in ipairs(args) do kps[i] = ColorSequenceKeypoint.new((i - 1) / (#args - 1), c) end
+    return ColorSequence.new(kps)
+end
+local function ns(...)
+    local kps = {}
+    for i, p in ipairs({ ... }) do kps[i] = NumberSequenceKeypoint.new(p[1], p[2]) end
+    return NumberSequence.new(kps)
+end
+local function rgb(r, g, b) return Color3.fromRGB(r, g, b) end
+
+local TEX_SMOKE = "rbxasset://textures/particles/smoke_main.dds"
+local TEX_FIRE  = "rbxasset://textures/particles/fire_main.dds"
+local TEX_SPARK = "rbxasset://textures/particles/sparkles_main.dds"
+
+-- ==================== COSMETICS: HALO ====================
+local haloPart, haloConn
+local haloBeams, haloEmit, haloLight = {}, {}, nil
+
+local function haloColor3()
+    return hexToColor3(State.HaloColorHex) or rgb(255, 215, 106)
+end
+
+local function clearHalo()
+    if haloConn then haloConn:Disconnect() haloConn = nil end
+    if haloPart then pcall(function() haloPart:Destroy() end) haloPart = nil end
+    haloBeams, haloEmit, haloLight = {}, {}, nil
+end
+
+local function updateHaloColor()
+    local col = haloColor3()
+    for _, e in ipairs(haloBeams) do
+        if e.b.Parent then e.b.Color = ColorSequence.new(col:Lerp(C.White, e.mix)) end
+    end
+    for _, em in ipairs(haloEmit) do
+        if em.Parent then em.Color = ColorSequence.new(col:Lerp(C.White, 0.4), col) end
+    end
+    if haloLight and haloLight.Parent then haloLight.Color = col end
+end
+
+local function buildHalo()
+    clearHalo()
+    if not State.Halo then return end
+    local char = LocalPlayer.Character
+    local head = char and char:FindFirstChild("Head")
+    if not head then return end
+    local col = haloColor3()
+
+    local part = Instance.new("Part")
+    part.Name = "AbaddonHalo"
+    part.Size = Vector3.new(0.3, 0.3, 0.3)
+    part.Transparency = 1
+    part.CanCollide, part.CanQuery, part.CanTouch = false, false, false
+    part.Massless = true
+    part.Parent = char
+
+    local weld = Instance.new("Weld")
+    weld.Part0, weld.Part1 = head, part
+    weld.C0 = CFrame.new(0, 1.65, 0)
+    weld.Parent = part
+    haloPart = part
+
+    local function ring(radius, width, transp, mixAmt, segs)
+        local atts = {}
+        for i = 0, segs - 1 do
+            local a = i / segs * 2 * math.pi
+            local at = Instance.new("Attachment")
+            at.Position = Vector3.new(math.cos(a) * radius, 0, math.sin(a) * radius)
+            at.Parent = part
+            atts[i + 1] = at
+        end
+        for i = 1, segs do
+            local b = Instance.new("Beam")
+            b.Attachment0, b.Attachment1 = atts[i], atts[i % segs + 1]
+            b.Width0, b.Width1 = width, width
+            b.FaceCamera = true
+            b.LightEmission = 1
+            b.LightInfluence = 0
+            b.Segments = 1
+            b.Transparency = NumberSequence.new(transp)
+            local mix = mixAmt * (0.5 + 0.5 * math.sin(i / segs * math.pi * 6))
+            b.Color = ColorSequence.new(col:Lerp(C.White, mix))
+            b.Parent = part
+            haloBeams[#haloBeams + 1] = { b = b, mix = mix }
+        end
+        return atts
+    end
+
+    local main = ring(1.15, 0.10, 0.05, 0.6, 36)  -- bright core ring
+    ring(1.15, 0.45, 0.86, 0.2, 36)               -- soft glow
+    ring(0.85, 0.04, 0.35, 0.9, 28)               -- thin inner ring
+
+    for i = 1, #main, 4 do
+        local em = Instance.new("ParticleEmitter")
+        em.Texture = TEX_SPARK
+        em.Rate = 3
+        em.Lifetime = NumberRange.new(1, 1.8)
+        em.Speed = NumberRange.new(0.2, 0.8)
+        em.SpreadAngle = Vector2.new(30, 30)
+        em.EmissionDirection = Enum.NormalId.Top
+        em.Acceleration = Vector3.new(0, 0.6, 0)
+        em.Size = ns({ 0, 0.18 }, { 1, 0 })
+        em.Transparency = ns({ 0, 0 }, { 0.7, 0.4 }, { 1, 1 })
+        em.LightEmission = 1
+        em.LightInfluence = 0
+        em.LockedToPart = false
+        em.RotSpeed = NumberRange.new(-90, 90)
+        em.Rotation = NumberRange.new(0, 360)
+        em.Color = ColorSequence.new(col:Lerp(C.White, 0.4), col)
+        em.Parent = main[i]
+        haloEmit[#haloEmit + 1] = em
+    end
+
+    local light = Instance.new("PointLight")
+    light.Brightness, light.Range, light.Color = 1.5, 9, col
+    light.Parent = part
+    haloLight = light
+
+    haloConn = RunService.RenderStepped:Connect(function()
+        if not weld.Parent then return end
+        local t = os.clock()
+        weld.C0 = CFrame.new(0, 1.65 + math.sin(t * 2) * 0.08, 0)
+            * CFrame.Angles(math.rad(8) * math.sin(t * 1.3), t * 1.2, math.rad(6) * math.cos(t * 1.1))
+    end)
+end
+
+local function setHalo(on)
+    State.Halo = on
+    buildHalo()
+end
+onCleanup(clearHalo)
+
+-- ==================== COSMETICS: TRAIL ====================
+local TRAIL_STYLES = { "Default", "Shadow", "Neon", "Rainbow", "Inferno", "Stardust", "Frost" }
+local trailObjs, trailEmit = {}, {}
+
+local function clearTrail()
+    for _, o in ipairs(trailObjs) do pcall(function() o:Destroy() end) end
+    trailObjs, trailEmit = {}, {}
+end
+
+local function mkAtt(hrp, pos)
+    local a = Instance.new("Attachment")
+    a.Position = pos
+    a.Parent = hrp
+    trailObjs[#trailObjs + 1] = a
+    return a
+end
+
+local function mkTrail(hrp, y0, y1, props)
+    local a0, a1 = mkAtt(hrp, Vector3.new(0, y0, 0)), mkAtt(hrp, Vector3.new(0, y1, 0))
+    local t = Instance.new("Trail")
+    t.Attachment0, t.Attachment1 = a0, a1
+    t.FaceCamera = true
+    t.MinLength = 0.05
+    for k, v in pairs(props) do t[k] = v end
+    t.Parent = hrp
+    trailObjs[#trailObjs + 1] = t
+    return t
+end
+
+local function mkEmit(hrp, y, props, rate, idle)
+    local at = mkAtt(hrp, Vector3.new(0, y, 0))
+    local e = Instance.new("ParticleEmitter")
+    e.LockedToPart = false
+    for k, v in pairs(props) do e[k] = v end
+    e.Rate = rate
+    e.Parent = at
+    trailEmit[#trailEmit + 1] = { e = e, base = rate, idle = idle or 0 }
+    return e
+end
+
+local TrailBuilders = {}
+
+TrailBuilders.Default = function(hrp)
+    mkTrail(hrp, 0.9, -0.9, {
+        Lifetime = 0.45, LightEmission = 0.6,
+        Color = cs(C.White, rgb(180, 200, 255)),
+        Transparency = ns({ 0, 0.25 }, { 1, 1 }),
+        WidthScale = ns({ 0, 1 }, { 1, 0 }),
+    })
+end
+
+TrailBuilders.Shadow = function(hrp)
+    -- dense dark smoke hugging the floor
+    mkEmit(hrp, -2.8, {
+        Texture = TEX_SMOKE, Color = cs(rgb(22, 22, 28), rgb(0, 0, 0)),
+        Size = ns({ 0, 2.6 }, { 1, 6.5 }),
+        Transparency = ns({ 0, 0.4 }, { 0.6, 0.7 }, { 1, 1 }),
+        Lifetime = NumberRange.new(1.8, 2.8), Speed = NumberRange.new(0.5, 2.5),
+        SpreadAngle = Vector2.new(90, 90), EmissionDirection = Enum.NormalId.Top,
+        Drag = 2, Acceleration = Vector3.new(0, -1, 0),
+        Rotation = NumberRange.new(0, 360), RotSpeed = NumberRange.new(-30, 30),
+        LightEmission = 0, LightInfluence = 0,
+    }, 45, 0.3)
+    mkEmit(hrp, -2.6, {
+        Texture = TEX_SMOKE, Color = cs(rgb(60, 30, 90), rgb(8, 0, 18)),
+        Size = ns({ 0, 3 }, { 1, 8 }),
+        Transparency = ns({ 0, 0.7 }, { 1, 1 }),
+        Lifetime = NumberRange.new(2, 3), Speed = NumberRange.new(0.3, 1.5),
+        SpreadAngle = Vector2.new(90, 90), EmissionDirection = Enum.NormalId.Top,
+        Drag = 2, Rotation = NumberRange.new(0, 360), RotSpeed = NumberRange.new(-20, 20),
+        LightEmission = 0.1, LightInfluence = 0,
+    }, 14, 0.3)
+    mkTrail(hrp, -2.4, -2.9, {
+        Lifetime = 0.6, LightEmission = 0.2,
+        Color = cs(rgb(0, 0, 0), rgb(50, 20, 80)),
+        Transparency = ns({ 0, 0.5 }, { 1, 1 }),
+        WidthScale = ns({ 0, 1 }, { 1, 0 }),
+    })
+end
+
+TrailBuilders.Neon = function(hrp)
+    mkTrail(hrp, 1.2, -1.2, {
+        Lifetime = 0.8, LightEmission = 1,
+        Color = cs(rgb(0, 255, 255), rgb(255, 0, 200), rgb(120, 60, 255)),
+        Transparency = ns({ 0, 0 }, { 0.6, 0.3 }, { 1, 1 }),
+        WidthScale = ns({ 0, 1 }, { 1, 0 }),
+    })
+    mkTrail(hrp, 0.2, -0.2, {
+        Lifetime = 0.5, LightEmission = 1,
+        Color = cs(C.White, rgb(180, 255, 255)),
+        Transparency = ns({ 0, 0 }, { 1, 1 }),
+    })
+    mkEmit(hrp, 0, {
+        Texture = TEX_SPARK, Color = cs(rgb(0, 255, 255), rgb(255, 0, 200)),
+        Size = ns({ 0, 0.35 }, { 1, 0 }), Transparency = ns({ 0, 0 }, { 1, 1 }),
+        Lifetime = NumberRange.new(0.5, 1), Speed = NumberRange.new(1, 3),
+        SpreadAngle = Vector2.new(180, 180), LightEmission = 1, LightInfluence = 0,
+    }, 30, 0.1)
+end
+
+TrailBuilders.Rainbow = function(hrp)
+    mkTrail(hrp, 1.1, -1.1, {
+        Lifetime = 1.0, LightEmission = 0.8,
+        Color = cs(rgb(255, 40, 40), rgb(255, 150, 30), rgb(255, 240, 40), rgb(60, 255, 90),
+                   rgb(40, 220, 255), rgb(70, 90, 255), rgb(190, 70, 255)),
+        Transparency = ns({ 0, 0.1 }, { 1, 1 }),
+        WidthScale = ns({ 0, 1 }, { 1, 0.2 }),
+    })
+end
+
+TrailBuilders.Inferno = function(hrp)
+    mkTrail(hrp, 1.0, -1.0, {
+        Lifetime = 0.6, LightEmission = 1,
+        Color = cs(rgb(255, 220, 80), rgb(255, 90, 0), rgb(90, 0, 0)),
+        Transparency = ns({ 0, 0.1 }, { 0.7, 0.5 }, { 1, 1 }),
+        WidthScale = ns({ 0, 1 }, { 1, 0 }),
+    })
+    mkEmit(hrp, -1.6, {
+        Texture = TEX_FIRE, Color = cs(rgb(255, 200, 60), rgb(255, 80, 0), rgb(80, 0, 0)),
+        Size = ns({ 0, 1.7 }, { 1, 0 }), Transparency = ns({ 0, 0.2 }, { 0.7, 0.6 }, { 1, 1 }),
+        Lifetime = NumberRange.new(0.6, 1), Speed = NumberRange.new(1, 3),
+        SpreadAngle = Vector2.new(25, 25), EmissionDirection = Enum.NormalId.Top,
+        Acceleration = Vector3.new(0, 6, 0), Rotation = NumberRange.new(0, 360),
+        LightEmission = 1, LightInfluence = 0,
+    }, 40, 0.3)
+    mkEmit(hrp, -1, {
+        Texture = TEX_SPARK, Color = cs(rgb(255, 150, 40), rgb(255, 40, 0)),
+        Size = ns({ 0, 0.3 }, { 1, 0 }), Transparency = ns({ 0, 0 }, { 1, 1 }),
+        Lifetime = NumberRange.new(0.8, 1.6), Speed = NumberRange.new(2, 5),
+        SpreadAngle = Vector2.new(60, 60), EmissionDirection = Enum.NormalId.Top,
+        Acceleration = Vector3.new(0, 4, 0), LightEmission = 1, LightInfluence = 0,
+    }, 15, 0.2)
+end
+
+TrailBuilders.Stardust = function(hrp)
+    mkTrail(hrp, 1.0, -1.0, {
+        Lifetime = 1.2, LightEmission = 1,
+        Color = cs(rgb(200, 150, 255), rgb(110, 90, 255), rgb(70, 200, 255)),
+        Transparency = ns({ 0, 0.3 }, { 1, 1 }),
+        WidthScale = ns({ 0, 1 }, { 1, 0 }),
+    })
+    mkEmit(hrp, 0, {
+        Texture = TEX_SPARK, Color = cs(rgb(215, 160, 255), rgb(120, 200, 255)),
+        Size = ns({ 0, 0.5 }, { 1, 0 }), Transparency = ns({ 0, 0 }, { 0.8, 0.3 }, { 1, 1 }),
+        Lifetime = NumberRange.new(1, 2), Speed = NumberRange.new(0.5, 2),
+        SpreadAngle = Vector2.new(180, 180), Rotation = NumberRange.new(0, 360),
+        RotSpeed = NumberRange.new(-120, 120), LightEmission = 1, LightInfluence = 0,
+    }, 45, 0.25)
+end
+
+TrailBuilders.Frost = function(hrp)
+    mkTrail(hrp, 1.0, -1.0, {
+        Lifetime = 0.7, LightEmission = 0.5,
+        Color = cs(C.White, rgb(200, 235, 255), rgb(120, 190, 255)),
+        Transparency = ns({ 0, 0.2 }, { 1, 1 }),
+        WidthScale = ns({ 0, 1 }, { 1, 0 }),
+    })
+    mkEmit(hrp, 0.5, {
+        Texture = TEX_SPARK, Color = cs(C.White, rgb(160, 210, 255)),
+        Size = ns({ 0, 0.3 }, { 1, 0.05 }), Transparency = ns({ 0, 0 }, { 1, 1 }),
+        Lifetime = NumberRange.new(1, 2), Speed = NumberRange.new(0.5, 2),
+        SpreadAngle = Vector2.new(180, 180), Acceleration = Vector3.new(0, -2, 0),
+        LightEmission = 0.8, LightInfluence = 0,
+    }, 35, 0.2)
+    mkEmit(hrp, -2.7, {
+        Texture = TEX_SMOKE, Color = cs(rgb(215, 235, 255), rgb(150, 200, 255)),
+        Size = ns({ 0, 2 }, { 1, 5 }), Transparency = ns({ 0, 0.7 }, { 1, 1 }),
+        Lifetime = NumberRange.new(1.5, 2.5), Speed = NumberRange.new(0.3, 1.5),
+        SpreadAngle = Vector2.new(90, 90), EmissionDirection = Enum.NormalId.Top,
+        Drag = 2, Rotation = NumberRange.new(0, 360), LightEmission = 0.3, LightInfluence = 0,
+    }, 14, 0.3)
+end
+
+local function applyTrail()
+    clearTrail()
+    if not State.Trail then return end
+    local hrp = myRoot()
+    if not hrp then return end
+    local builder = TrailBuilders[State.TrailStyle] or TrailBuilders.Default
+    builder(hrp)
+end
+onCleanup(clearTrail)
+
+-- emitters react to movement speed
+track(RunService.Heartbeat:Connect(function()
+    if #trailEmit == 0 then return end
+    local hrp = myRoot()
+    if not hrp then return end
+    local v = hrp.AssemblyLinearVelocity
+    local f = math.clamp(Vector3.new(v.X, 0, v.Z).Magnitude / 14, 0, 1)
+    for _, r in ipairs(trailEmit) do
+        if r.e.Parent then r.e.Rate = r.base * (r.idle + (1 - r.idle) * f) end
+    end
+end))
+
+-- ==================== FUN: SANDEVISTAN ====================
+local SANDY_GREEN = rgb(110, 255, 150)
+local SANDY_LIFE, SANDY_MAX = 0.65, 16
+local sandyGhosts, sandyHL, sandyCC = {}, nil, nil
+local sandyLastPos, sandyLastT = nil, 0
+
+local sandyFlash = new("Frame", {
+    Name = "AbaddonSandyFlash", Size = UDim2.fromScale(1, 1), BackgroundColor3 = rgb(210, 255, 225),
+    BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 900, Active = false,
+}, ScreenGui)
+
+local function sandyFlashFx()
+    sandyFlash.BackgroundColor3 = rgb(215, 255, 228)
+    sandyFlash.BackgroundTransparency = 0.05
+    tween(sandyFlash, 0.8, { BackgroundTransparency = 1, BackgroundColor3 = SANDY_GREEN }, Enum.EasingStyle.Quad)
+    local blur = Instance.new("BlurEffect")
+    blur.Name = "AbaddonSandyBlur"
+    blur.Size = 30
+    blur.Parent = Lighting
+    tween(blur, 0.8, { Size = 0 })
+    Debris:AddItem(blur, 1)
+end
+
+local function playSandySound()
+    local s = Instance.new("Sound")
+    s.SoundId = SANDY_SOUND
+    s.Volume = 2
+    s.Parent = SoundService
+    s:Play()
+    Debris:AddItem(s, 15)
+end
+
+local function sandyPalette(on)
+    if on then
+        if not sandyCC then
+            sandyCC = Instance.new("ColorCorrectionEffect")
+            sandyCC.Name = "AbaddonSandyCC"
+            sandyCC.Parent = Lighting
+        end
+        tween(sandyCC, 0.5, {
+            TintColor = rgb(150, 255, 175), Saturation = 0.15, Contrast = 0.18, Brightness = 0.02,
+        })
+    elseif sandyCC then
+        local cc = sandyCC
+        sandyCC = nil
+        tween(cc, 0.5, { TintColor = C.White, Saturation = 0, Contrast = 0, Brightness = 0 })
+        task.delay(0.55, function() pcall(function() cc:Destroy() end) end)
+    end
+end
+
+local function clearGhosts()
+    for _, g in ipairs(sandyGhosts) do pcall(function() g.vp:Destroy() end) end
+    sandyGhosts = {}
+end
+
+local function spawnGhost()
+    local char = LocalPlayer.Character
+    if not char then return end
+    local vp = Instance.new("ViewportFrame")
+    vp.Name = "AbaddonGhost"
+    vp.Size = UDim2.fromScale(1, 1)
+    vp.BackgroundTransparency = 1
+    vp.BorderSizePixel = 0
+    vp.ZIndex = 2
+    vp.Active = false
+    vp.Ambient = rgb(120, 255, 160)
+    vp.LightColor = rgb(150, 255, 180)
+    vp.ImageColor3 = rgb(120, 255, 160)
+    vp.ImageTransparency = 0.4
+
+    local count = 0
+    for _, p in ipairs(char:GetDescendants()) do
+        if p:IsA("BasePart") and p.Name ~= "HumanoidRootPart" and p.Name ~= "AbaddonHalo" and p.Transparency < 0.95 then
+            local ok, c = pcall(function() return p:Clone() end)
+            if ok and c then
+                for _, d in ipairs(c:GetChildren()) do
+                    if not d:IsA("DataModelMesh") then d:Destroy() end
+                    if d:IsA("SpecialMesh") then pcall(function() d.TextureId = "" end) end
+                end
+                pcall(function() if c:IsA("MeshPart") then c.TextureID = "" end end)
+                c.Anchored, c.CanCollide, c.CanQuery, c.CanTouch = true, false, false, false
+                c.CastShadow = false
+                c.Transparency = 0
+                c.Material = Enum.Material.Neon
+                c.Color = SANDY_GREEN
+                c.Parent = vp
+                count = count + 1
+            end
+        end
+    end
+    if count == 0 then vp:Destroy() return end
+
+    local vcam = Instance.new("Camera")
+    vcam.Parent = vp
+    vp.CurrentCamera = vcam
+    local wc = workspace.CurrentCamera
+    if wc then vcam.CFrame, vcam.FieldOfView = wc.CFrame, wc.FieldOfView end
+    vp.Parent = ScreenGui
+
+    sandyGhosts[#sandyGhosts + 1] = { vp = vp, cam = vcam, born = os.clock() }
+    while #sandyGhosts > SANDY_MAX do
+        local old = table.remove(sandyGhosts, 1)
+        pcall(function() old.vp:Destroy() end)
+    end
+end
+
+track(RunService.RenderStepped:Connect(function()
+    local now = os.clock()
+    local wc = workspace.CurrentCamera
+
+    if State.Sandevistan then
+        local char = LocalPlayer.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        if sandyHL and char and sandyHL.Adornee ~= char then sandyHL.Adornee = char end
+        if hrp then
+            local pos = hrp.Position
+            if (not sandyLastPos or (pos - sandyLastPos).Magnitude >= 1.4) and now - sandyLastT > 0.04 then
+                if sandyLastPos then pcall(spawnGhost) end
+                sandyLastPos, sandyLastT = pos, now
+            end
+        end
+    end
+
+    if #sandyGhosts == 0 or not wc then return end
+    for i = #sandyGhosts, 1, -1 do
+        local g = sandyGhosts[i]
+        local age = (now - g.born) / SANDY_LIFE
+        if age >= 1 or not g.vp.Parent then
+            pcall(function() g.vp:Destroy() end)
+            table.remove(sandyGhosts, i)
+        else
+            g.cam.CFrame = wc.CFrame
+            g.cam.FieldOfView = wc.FieldOfView
+            g.vp.ImageTransparency = 0.4 + 0.6 * age
+            g.vp.ImageColor3 = rgb(120, 255, 160):Lerp(rgb(20, 120, 60), age)
+        end
+    end
+end))
+
+local function setSandevistan(on, silent)
+    State.Sandevistan = on
+    local char = LocalPlayer.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if on then
+        sandyPalette(true)
+        if not silent then
+            sandyFlashFx()
+            playSandySound()
+        end
+        if hum then hum.WalkSpeed = SANDY_SPEED end
+        if not sandyHL then
+            sandyHL = Instance.new("Highlight")
+            sandyHL.FillTransparency = 1
+            sandyHL.OutlineColor = SANDY_GREEN
+            sandyHL.OutlineTransparency = 0.2
+            sandyHL.DepthMode = Enum.HighlightDepthMode.Occluded
+            sandyHL.Adornee = char
+            sandyHL.Parent = ScreenGui
+        end
+        sandyLastPos = nil
+    else
+        sandyPalette(false)
+        clearGhosts()
+        if sandyHL then sandyHL:Destroy() sandyHL = nil end
+        if hum then hum.WalkSpeed = State.WalkSpeed end
+    end
+end
+onCleanup(function()
+    State.Sandevistan = false
+    sandyPalette(false)
+    clearGhosts()
+end)
 
 -- ==================== CONFIG SYSTEM ====================
 local function saveConfig()
@@ -1838,22 +2798,36 @@ simpleToggle(VisualPage, "ESP Generators", 4, "ESP_Generators", nil, {
     hex = State.ESP_GeneratorColorHex, stateKey = "ESP_GeneratorColorHex",
     onColor = function(col, hex) ESPColors.Generator = col State.ESP_GeneratorColorHex = hex end,
 })
+simpleToggle(VisualPage, "ESP Hooks", 5, "ESP_Hooks")
+simpleToggle(VisualPage, "ESP Pallets", 6, "ESP_Pallets")
+simpleToggle(VisualPage, "ESP Exit Gates", 7, "ESP_Gates")
+simpleToggle(VisualPage, "ESP Info (dist / hp)", 8, "ESP_Info")
+tracerWidget = simpleToggle(VisualPage, "Tracers", 9, "Tracers", function(v) setTracers(v) end)
 
-createSection(VisualPage, "World", 5)
-simpleToggle(VisualPage, "Fullbright", 6, "Fullbright", function(v) setFullbright(v) end)
-simpleToggle(VisualPage, "No Shadows", 7, nil, function(v) setNoShadows(v) end, nil, "enabled", "disabled")
-simpleToggle(VisualPage, "No Textures", 8, nil, function(v, silent) setNoTextures(v, true) end, nil, "enabled", "disabled")
-simpleToggle(VisualPage, "Custom Time", 9, "CustomTime")
-createSlider(VisualPage, "Time of Day", 0, 24, 14, 10,
+createSection(VisualPage, "World", 10)
+simpleToggle(VisualPage, "Fullbright", 11, "Fullbright", function(v) setFullbright(v) end)
+simpleToggle(VisualPage, "No Shadows", 12, nil, function(v) setNoShadows(v) end, nil, "enabled", "disabled")
+simpleToggle(VisualPage, "No Textures", 13, nil, function(v, silent) setNoTextures(v, true) end, nil, "enabled", "disabled")
+simpleToggle(VisualPage, "Custom Time", 14, "CustomTime")
+createSlider(VisualPage, "Time of Day", 0, 24, 14, 15,
     function(v) State.ClockTime = v if State.CustomTime then Lighting.ClockTime = v end end,
     function(v) pushLog("ClockTime: " .. tostring(v), "info") end,
     "ClockTime")
 
-createSection(VisualPage, "Camera", 11)
-createSlider(VisualPage, "Field of View", 30, 120, 70, 12,
+createSection(VisualPage, "Camera", 16)
+createSlider(VisualPage, "Field of View", 30, 120, 70, 17,
     function(v) setCameraFOV(v) end,
     function(v) pushLog("Camera FOV: " .. tostring(v), "info") end,
     "CameraFOV")
+simpleToggle(VisualPage, "Force Third Person", 18, "ThirdPerson", function(v) setThirdPerson(v) end)
+createToggle(VisualPage, "Shift Lock", true, 19, function(v, silent)
+    State.ShiftLock = v
+    if not v then releaseShiftLock() end
+    if silent then return end
+    pushLog("Shift Lock: " .. (v and "ON" or "OFF"), "info")
+end, "ShiftLock")
+createSlider(VisualPage, "Max Camera Zoom", 20, 500, 128, 20,
+    function(v) State.MaxZoom = v end, nil, "MaxZoom")
 
 -- ==================== MAIN ====================
 createSection(MainPage, "Skill Check", 1)
@@ -1863,12 +2837,29 @@ createSection(MainPage, "Protection", 3)
 simpleToggle(MainPage, "Anti-AFK", 4, "AntiAFK", function(v) setAntiAFK(v) end)
 simpleToggle(MainPage, "Anti-Fling", 5, nil, function(v) setAntiFling(v) end)
 
+createSection(MainPage, "Survival", 6)
+simpleToggle(MainPage, "Killer Proximity Alert", 7, "KillerAlert")
+createSlider(MainPage, "Alert Range (studs)", 20, 200, 60, 8,
+    function(v) State.AlertRange = v end, nil, "AlertRange")
+simpleToggle(MainPage, "Radar", 9, "Radar")
+createSlider(MainPage, "Radar Range (studs)", 50, 300, 120, 10,
+    function(v) State.RadarRange = v end, nil, "RadarRange")
+
+createSection(MainPage, "Quick Teleports", 11)
+createButton(MainPage, "TP Nearest Generator", 12, tpNearestGen)
+createButton(MainPage, "TP Exit Gate", 13, tpNearestGate)
+createButton(MainPage, "TP Far From Killer", 14, tpSafeSpot)
+
+createSection(MainPage, "Spectate", 15)
+createTextAction(MainPage, "Spectate Player", "nickname", 16, function(name) spectate(name) end)
+createButton(MainPage, "Stop Spectating", 17, unspectate)
+
 -- ==================== MOVEMENT ====================
 createSection(MovementPage, "Character", 1)
 createInput(MovementPage, "WalkSpeed", 16, 2, function(v, silent)
     State.WalkSpeed = v
     local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
-    if hum then hum.WalkSpeed = v end
+    if hum and not State.Sandevistan then hum.WalkSpeed = v end
     if silent then return end
     notify("WalkSpeed: " .. tostring(v))
     pushLog("WalkSpeed set to " .. tostring(v), "info")
@@ -1901,6 +2892,21 @@ createInput(MovementPage, "Fake Lag Time (ms)", 200, 13, function(v)
     State.FakeLagTime = math.clamp(v, 20, 2000)
 end, "FakeLagTime")
 
+-- ==================== COSMETICS ====================
+createSection(CosmeticsPage, "Halo", 1)
+simpleToggle(CosmeticsPage, "Halo", 2, "Halo", function(v) setHalo(v) end, {
+    hex = State.HaloColorHex, stateKey = "HaloColorHex",
+    onColor = function(col, hex) State.HaloColorHex = hex updateHaloColor() end,
+})
+
+createSection(CosmeticsPage, "Trail", 3)
+simpleToggle(CosmeticsPage, "Trail", 4, "Trail", function(v) applyTrail() end)
+createSelector(CosmeticsPage, "Style (LMB/RMB)", TRAIL_STYLES, "Default", 5, function(v, silent)
+    State.TrailStyle = v
+    applyTrail()
+    if not silent then pushLog("Trail style: " .. v, "info") end
+end, "TrailStyle")
+
 -- ==================== FUN ====================
 createSection(FunPage, "Character", 1)
 simpleToggle(FunPage, "Back Walk", 2, nil, function(v) setBackWalk(v) end)
@@ -1913,6 +2919,9 @@ createInput(FunPage, "Crosshair Size", 10, 7, function(v)
     State.CrosshairSize = math.clamp(v, 2, 80)
     buildCrosshair()
 end, "CrosshairSize")
+
+createSection(FunPage, "Sandevistan", 8)
+simpleToggle(FunPage, "Sandevistan (speed 22)", 9, "Sandevistan", function(v, silent) setSandevistan(v, silent) end)
 
 -- ==================== SETTINGS ====================
 createSection(SettingsPage, "Interface", 1)
@@ -1957,7 +2966,8 @@ createButton(SettingsPage, "Delete Config File", 15, deleteConfig, true)
 
 -- ==================== ESP ====================
 local ESPFolder = new("Folder", { Name = "AbaddonESP" }, ScreenGui)
-local playerEsp, playerTags, genEsp = {}, {}, {}
+local playerEsp, playerTags = {}, {}
+local objHL = {}
 
 local function clearEsp(cache, key)
     if cache[key] then cache[key]:Destroy() cache[key] = nil end
@@ -2000,7 +3010,7 @@ local function applyPlayerESP()
                 if not tag or not tag.Parent then
                     tag = Instance.new("BillboardGui")
                     tag.Name = "AbaddonTag"
-                    tag.Size = UDim2.new(0, 220, 0, 22)
+                    tag.Size = UDim2.new(0, 260, 0, 22)
                     tag.StudsOffset = Vector3.new(0, 3, 0)
                     tag.AlwaysOnTop = true
                     tag.Adornee = head
@@ -2019,7 +3029,19 @@ local function applyPlayerESP()
                 tag.Adornee = head
                 local l = tag:FindFirstChild("Label")
                 if l then
-                    l.Text = plr.Name
+                    local txt = plr.Name
+                    if State.ESP_Info then
+                        local mine = myRoot()
+                        local th = char:FindFirstChild("HumanoidRootPart")
+                        local hm = char:FindFirstChildOfClass("Humanoid")
+                        if mine and th then
+                            txt = txt .. string.format(" [%d st]", math.floor((th.Position - mine.Position).Magnitude))
+                        end
+                        if hm then
+                            txt = txt .. string.format(" %d hp", math.floor(hm.Health))
+                        end
+                    end
+                    l.Text = txt
                     l.TextColor3 = col
                 end
             end
@@ -2030,33 +3052,59 @@ local function applyPlayerESP()
     end
 end
 
-local function applyGeneratorESP()
-    for _, obj in ipairs(workspace:GetDescendants()) do
-        if obj:IsA("Model") and obj.Name:lower():find("generator") then
-            if State.ESP_Generators then
-                local h = genEsp[obj]
-                if not h then
+local OBJ_COLORS = {
+    gen    = function() return ESPColors.Generator end,
+    hook   = Color3.fromRGB(226, 96, 96),
+    pallet = Color3.fromRGB(214, 175, 98),
+    gate   = Color3.fromRGB(120, 170, 255),
+}
+
+local function applyObjectESP()
+    for _, d in ipairs(OBJ_DEFS) do
+        local cc = OBJ_COLORS[d.id]
+        local col = type(cc) == "function" and cc() or cc
+        for _, obj in ipairs(ObjectsFound[d.id]) do
+            if State[d.key] and obj.Parent then
+                local h = objHL[obj]
+                if not h or not h.Parent then
                     h = Instance.new("Highlight")
                     h.Adornee = obj
                     h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
                     h.FillTransparency = 0.78
                     h.OutlineTransparency = 0.15
                     h.Parent = ESPFolder
-                    genEsp[obj] = h
+                    objHL[obj] = h
                 end
-                h.FillColor = ESPColors.Generator
-                h.OutlineColor = ESPColors.Generator
-            else
-                clearEsp(genEsp, obj)
+                h.FillColor = col
+                h.OutlineColor = col
+            elseif objHL[obj] then
+                objHL[obj]:Destroy()
+                objHL[obj] = nil
             end
         end
     end
+    for obj, h in pairs(objHL) do
+        if not obj.Parent then h:Destroy() objHL[obj] = nil end
+    end
+end
+
+local function needObjectScan()
+    if State.Radar then return true end
+    for _, d in ipairs(OBJ_DEFS) do
+        if State[d.key] then return true end
+    end
+    return false
 end
 
 task.spawn(function()
+    local tickN = 0
     while ScreenGui.Parent do
         pcall(applyPlayerESP)
-        pcall(applyGeneratorESP)
+        if tickN % 2 == 0 then
+            if needObjectScan() then pcall(collectObjects) end
+            pcall(applyObjectESP)
+        end
+        tickN = tickN + 1
         task.wait(0.5)
     end
 end)
@@ -2239,7 +3287,7 @@ LocalPlayer.CharacterAdded:Connect(function(char)
     task.wait(0.4)
     local hum = char:FindFirstChildOfClass("Humanoid")
     if hum then
-        hum.WalkSpeed = State.WalkSpeed
+        hum.WalkSpeed = State.Sandevistan and SANDY_SPEED or State.WalkSpeed
         hum.PlatformStand = false
     end
     if State.Noclip then setNoclip(true) end
@@ -2253,6 +3301,9 @@ LocalPlayer.CharacterAdded:Connect(function(char)
             end
         end)
     end
+    if State.Halo then buildHalo() end
+    if State.Trail then applyTrail() end
+    sandyLastPos = nil
 end)
 
 -- ==================== BOOT ====================
@@ -2270,3 +3321,8 @@ end)
 
 notify("Abaddon loaded · RightShift")
 pushLog("Abaddon loaded successfully", "success")
+
+end
+PartThree()
+end
+PartTwo()
