@@ -91,18 +91,32 @@ local State = {
     ESP_Hooks      = false,
     ESP_Pallets    = false,
     ESP_Gates      = false,
+    ESP_Items      = false,
     ESP_Info       = false,
     Tracers        = false,
     Fullbright     = false,
     NoShadows      = false,
     NoTextures     = false,
+    NoFog          = false,
     CustomTime     = false,
     AutoSkillCheck = false,
     AntiAFK        = false,
+    AutoRejoin     = false,
+    InstantPrompts = false,
+    AutoInteract   = false,
+    InteractRange  = 12,
     KillerAlert    = false,
+    KillerLook     = false,
     AlertRange     = 60,
     Radar          = false,
     RadarRange     = 120,
+    ObjHUD         = false,
+    PlayerList     = false,
+    OffArrows      = false,
+    ArrowKiller    = true,
+    ArrowSurvivor  = true,
+    ArrowGen       = false,
+    ArrowRadius    = 220,
     WalkSpeed      = 16,
     WalkSpeedLock  = true,
     Noclip         = false,
@@ -126,10 +140,26 @@ local State = {
     FakeLag        = false,
     FakeLagTime    = 200,
     Sandevistan    = false,
+    SandyStyle     = "Matrix",
     Halo           = false,
+    HaloStyle      = "Classic",
     HaloColorHex   = "FFD76A",
-    Trail          = false,
-    TrailStyle     = "Default",
+    Wings          = false,
+    WingStyle      = "Angelic",
+    WingSize       = 100,
+    Aura           = false,
+    AuraStyle      = "Spirit",
+    Rune           = false,
+    RuneStyle      = "Hex",
+    RuneColorHex   = "B06BFF",
+    BodyGlow       = false,
+    GlowStyle      = "Pulse",
+    GlowColorHex   = "78C8FF",
+    Orbs           = false,
+    OrbStyle       = "Spheres",
+    OrbColorHex    = "78C8FF",
+    Footprints     = false,
+    FootColorHex   = "8CB4FF",
     ESP_SurvivorColorHex  = "8CB4DC",
     ESP_KillerColorHex    = "C85555",
     ESP_GeneratorColorHex = "8CC89B",
@@ -1323,7 +1353,7 @@ local SettingsPage  = createTab("Settings",  6)
 setActiveTab("Visuals")
 
 local function PartTwo()
-    
+
 -- ==================== HELPERS: roles / objects ====================
 local function roleOf(plr)
     local t = plr.Team and plr.Team.Name:lower() or ""
@@ -1342,11 +1372,12 @@ local OBJ_DEFS = {
     { key = "ESP_Hooks",      id = "hook",   pat = { "hook" } },
     { key = "ESP_Pallets",    id = "pallet", pat = { "pallet" } },
     { key = "ESP_Gates",      id = "gate",   pat = { "gate", "exit" } },
+    { key = "ESP_Items",      id = "item",   pat = { "medkit", "toolbox", "flashlight", "chest", "syringe" } },
 }
-local ObjectsFound = { gen = {}, hook = {}, pallet = {}, gate = {} }
+local ObjectsFound = { gen = {}, hook = {}, pallet = {}, gate = {}, item = {} }
 
 local function collectObjects()
-    local out = { gen = {}, hook = {}, pallet = {}, gate = {} }
+    local out = { gen = {}, hook = {}, pallet = {}, gate = {}, item = {} }
     for _, obj in ipairs(workspace:GetDescendants()) do
         if obj:IsA("Model") and not Players:GetPlayerFromCharacter(obj) then
             local nm = obj.Name:lower()
@@ -2214,6 +2245,8 @@ end
 local function PartThree()
 
 -- ==================== COSMETICS: shared helpers ====================
+local Fx = {}
+
 local function cs(...)
     local args, kps = { ... }, {}
     for i, c in ipairs(args) do kps[i] = ColorSequenceKeypoint.new((i - 1) / (#args - 1), c) end
@@ -2228,492 +2261,1336 @@ local function rgb(r, g, b) return Color3.fromRGB(r, g, b) end
 
 local TEX_SMOKE = "rbxasset://textures/particles/smoke_main.dds"
 local TEX_FIRE  = "rbxasset://textures/particles/fire_main.dds"
-local TEX_SPARK = "rbxasset://textures/particles/sparkles_main.dds"
 
--- ==================== COSMETICS: HALO ====================
-local haloPart, haloConn
-local haloBeams, haloEmit, haloLight = {}, {}, nil
-
-local function haloColor3()
-    return hexToColor3(State.HaloColorHex) or rgb(255, 215, 106)
-end
-
-local function clearHalo()
-    if haloConn then haloConn:Disconnect() haloConn = nil end
-    if haloPart then pcall(function() haloPart:Destroy() end) haloPart = nil end
-    haloBeams, haloEmit, haloLight = {}, {}, nil
-end
-
-local function updateHaloColor()
-    local col = haloColor3()
-    for _, e in ipairs(haloBeams) do
-        if e.b.Parent then e.b.Color = ColorSequence.new(col:Lerp(C.White, e.mix)) end
-    end
-    for _, em in ipairs(haloEmit) do
-        if em.Parent then em.Color = ColorSequence.new(col:Lerp(C.White, 0.4), col) end
-    end
-    if haloLight and haloLight.Parent then haloLight.Color = col end
-end
-
-local function buildHalo()
-    clearHalo()
-    if not State.Halo then return end
+-- folder inside the character that holds every cosmetic part
+local function fxFolder()
     local char = LocalPlayer.Character
-    local head = char and char:FindFirstChild("Head")
-    if not head then return end
-    local col = haloColor3()
-
-    local part = Instance.new("Part")
-    part.Name = "AbaddonHalo"
-    part.Size = Vector3.new(0.3, 0.3, 0.3)
-    part.Transparency = 1
-    part.CanCollide, part.CanQuery, part.CanTouch = false, false, false
-    part.Massless = true
-    part.Parent = char
-
-    local weld = Instance.new("Weld")
-    weld.Part0, weld.Part1 = head, part
-    weld.C0 = CFrame.new(0, 1.65, 0)
-    weld.Parent = part
-    haloPart = part
-
-    local function ring(radius, width, transp, mixAmt, segs)
-        local atts = {}
-        for i = 0, segs - 1 do
-            local a = i / segs * 2 * math.pi
-            local at = Instance.new("Attachment")
-            at.Position = Vector3.new(math.cos(a) * radius, 0, math.sin(a) * radius)
-            at.Parent = part
-            atts[i + 1] = at
-        end
-        for i = 1, segs do
-            local b = Instance.new("Beam")
-            b.Attachment0, b.Attachment1 = atts[i], atts[i % segs + 1]
-            b.Width0, b.Width1 = width, width
-            b.FaceCamera = true
-            b.LightEmission = 1
-            b.LightInfluence = 0
-            b.Segments = 1
-            b.Transparency = NumberSequence.new(transp)
-            local mix = mixAmt * (0.5 + 0.5 * math.sin(i / segs * math.pi * 6))
-            b.Color = ColorSequence.new(col:Lerp(C.White, mix))
-            b.Parent = part
-            haloBeams[#haloBeams + 1] = { b = b, mix = mix }
-        end
-        return atts
+    if not char then return nil end
+    local f = char:FindFirstChild("AbaddonFx")
+    if not f then
+        f = Instance.new("Folder")
+        f.Name = "AbaddonFx"
+        f.Parent = char
     end
-
-    local main = ring(1.15, 0.10, 0.05, 0.6, 36)  -- bright core ring
-    ring(1.15, 0.45, 0.86, 0.2, 36)               -- soft glow
-    ring(0.85, 0.04, 0.35, 0.9, 28)               -- thin inner ring
-
-    for i = 1, #main, 4 do
-        local em = Instance.new("ParticleEmitter")
-        em.Texture = TEX_SPARK
-        em.Rate = 3
-        em.Lifetime = NumberRange.new(1, 1.8)
-        em.Speed = NumberRange.new(0.2, 0.8)
-        em.SpreadAngle = Vector2.new(30, 30)
-        em.EmissionDirection = Enum.NormalId.Top
-        em.Acceleration = Vector3.new(0, 0.6, 0)
-        em.Size = ns({ 0, 0.18 }, { 1, 0 })
-        em.Transparency = ns({ 0, 0 }, { 0.7, 0.4 }, { 1, 1 })
-        em.LightEmission = 1
-        em.LightInfluence = 0
-        em.LockedToPart = false
-        em.RotSpeed = NumberRange.new(-90, 90)
-        em.Rotation = NumberRange.new(0, 360)
-        em.Color = ColorSequence.new(col:Lerp(C.White, 0.4), col)
-        em.Parent = main[i]
-        haloEmit[#haloEmit + 1] = em
-    end
-
-    local light = Instance.new("PointLight")
-    light.Brightness, light.Range, light.Color = 1.5, 9, col
-    light.Parent = part
-    haloLight = light
-
-    haloConn = RunService.RenderStepped:Connect(function()
-        if not weld.Parent then return end
-        local t = os.clock()
-        weld.C0 = CFrame.new(0, 1.65 + math.sin(t * 2) * 0.08, 0)
-            * CFrame.Angles(math.rad(8) * math.sin(t * 1.3), t * 1.2, math.rad(6) * math.cos(t * 1.1))
-    end)
+    return f
 end
 
-local function setHalo(on)
-    State.Halo = on
-    buildHalo()
-end
-onCleanup(clearHalo)
-
--- ==================== COSMETICS: TRAIL ====================
-local TRAIL_STYLES = { "Default", "Shadow", "Neon", "Rainbow", "Inferno", "Stardust", "Frost" }
-local trailObjs, trailEmit = {}, {}
-
-local function clearTrail()
-    for _, o in ipairs(trailObjs) do pcall(function() o:Destroy() end) end
-    trailObjs, trailEmit = {}, {}
+local function floorOff()
+    local c = LocalPlayer.Character
+    local hum = c and c:FindFirstChildOfClass("Humanoid")
+    local hrp = c and c:FindFirstChild("HumanoidRootPart")
+    if not hum or not hrp or hum.RigType == Enum.HumanoidRigType.R6 then return -3 end
+    return -(hum.HipHeight + hrp.Size.Y / 2)
 end
 
-local function mkAtt(hrp, pos)
+-- invisible neon part (all cosmetics are built from real 3D geometry, no flat images)
+local function newPart(parent, size)
+    local p = Instance.new("Part")
+    p.Size = size or Vector3.new(0.2, 0.2, 0.2)
+    p.Transparency = 1
+    p.Material = Enum.Material.Neon
+    p.CanCollide, p.CanQuery, p.CanTouch = false, false, false
+    p.Massless, p.CastShadow = true, false
+    p.Parent = parent
+    return p
+end
+
+local function weld(p0, p1, c0)
+    local w = Instance.new("Weld")
+    w.Part0, w.Part1, w.C0 = p0, p1, c0 or CFrame.new()
+    w.Parent = p1
+    return w
+end
+
+local function att(parent, pos, rot)
     local a = Instance.new("Attachment")
-    a.Position = pos
-    a.Parent = hrp
-    trailObjs[#trailObjs + 1] = a
+    a.CFrame = CFrame.new(pos or Vector3.zero) * (rot or CFrame.new())
+    a.Parent = parent
     return a
 end
 
-local function mkTrail(hrp, y0, y1, props)
-    local a0, a1 = mkAtt(hrp, Vector3.new(0, y0, 0)), mkAtt(hrp, Vector3.new(0, y1, 0))
-    local t = Instance.new("Trail")
-    t.Attachment0, t.Attachment1 = a0, a1
-    t.FaceCamera = true
-    t.MinLength = 0.05
-    for k, v in pairs(props) do t[k] = v end
-    t.Parent = hrp
-    trailObjs[#trailObjs + 1] = t
-    return t
-end
-
-local function mkEmit(hrp, y, props, rate, idle)
-    local at = mkAtt(hrp, Vector3.new(0, y, 0))
+local function emitter(parent, props)
     local e = Instance.new("ParticleEmitter")
-    e.LockedToPart = false
+    e.LightEmission, e.LightInfluence, e.LockedToPart = 1, 0, false
     for k, v in pairs(props) do e[k] = v end
-    e.Rate = rate
-    e.Parent = at
-    trailEmit[#trailEmit + 1] = { e = e, base = rate, idle = idle or 0 }
+    e.Parent = parent
     return e
 end
 
-local TrailBuilders = {}
-
-TrailBuilders.Default = function(hrp)
-    mkTrail(hrp, 0.9, -0.9, {
-        Lifetime = 0.45, LightEmission = 0.6,
-        Color = cs(C.White, rgb(180, 200, 255)),
-        Transparency = ns({ 0, 0.25 }, { 1, 1 }),
-        WidthScale = ns({ 0, 1 }, { 1, 0 }),
-    })
-end
-
-TrailBuilders.Shadow = function(hrp)
-    -- dense dark smoke hugging the floor
-    mkEmit(hrp, -2.8, {
-        Texture = TEX_SMOKE, Color = cs(rgb(22, 22, 28), rgb(0, 0, 0)),
-        Size = ns({ 0, 2.6 }, { 1, 6.5 }),
-        Transparency = ns({ 0, 0.4 }, { 0.6, 0.7 }, { 1, 1 }),
-        Lifetime = NumberRange.new(1.8, 2.8), Speed = NumberRange.new(0.5, 2.5),
-        SpreadAngle = Vector2.new(90, 90), EmissionDirection = Enum.NormalId.Top,
-        Drag = 2, Acceleration = Vector3.new(0, -1, 0),
-        Rotation = NumberRange.new(0, 360), RotSpeed = NumberRange.new(-30, 30),
-        LightEmission = 0, LightInfluence = 0,
-    }, 45, 0.3)
-    mkEmit(hrp, -2.6, {
-        Texture = TEX_SMOKE, Color = cs(rgb(60, 30, 90), rgb(8, 0, 18)),
-        Size = ns({ 0, 3 }, { 1, 8 }),
-        Transparency = ns({ 0, 0.7 }, { 1, 1 }),
-        Lifetime = NumberRange.new(2, 3), Speed = NumberRange.new(0.3, 1.5),
-        SpreadAngle = Vector2.new(90, 90), EmissionDirection = Enum.NormalId.Top,
-        Drag = 2, Rotation = NumberRange.new(0, 360), RotSpeed = NumberRange.new(-20, 20),
-        LightEmission = 0.1, LightInfluence = 0,
-    }, 14, 0.3)
-    mkTrail(hrp, -2.4, -2.9, {
-        Lifetime = 0.6, LightEmission = 0.2,
-        Color = cs(rgb(0, 0, 0), rgb(50, 20, 80)),
-        Transparency = ns({ 0, 0.5 }, { 1, 1 }),
-        WidthScale = ns({ 0, 1 }, { 1, 0 }),
-    })
-end
-
-TrailBuilders.Neon = function(hrp)
-    mkTrail(hrp, 1.2, -1.2, {
-        Lifetime = 0.8, LightEmission = 1,
-        Color = cs(rgb(0, 255, 255), rgb(255, 0, 200), rgb(120, 60, 255)),
-        Transparency = ns({ 0, 0 }, { 0.6, 0.3 }, { 1, 1 }),
-        WidthScale = ns({ 0, 1 }, { 1, 0 }),
-    })
-    mkTrail(hrp, 0.2, -0.2, {
-        Lifetime = 0.5, LightEmission = 1,
-        Color = cs(C.White, rgb(180, 255, 255)),
-        Transparency = ns({ 0, 0 }, { 1, 1 }),
-    })
-    mkEmit(hrp, 0, {
-        Texture = TEX_SPARK, Color = cs(rgb(0, 255, 255), rgb(255, 0, 200)),
-        Size = ns({ 0, 0.35 }, { 1, 0 }), Transparency = ns({ 0, 0 }, { 1, 1 }),
-        Lifetime = NumberRange.new(0.5, 1), Speed = NumberRange.new(1, 3),
-        SpreadAngle = Vector2.new(180, 180), LightEmission = 1, LightInfluence = 0,
-    }, 30, 0.1)
-end
-
-TrailBuilders.Rainbow = function(hrp)
-    mkTrail(hrp, 1.1, -1.1, {
-        Lifetime = 1.0, LightEmission = 0.8,
-        Color = cs(rgb(255, 40, 40), rgb(255, 150, 30), rgb(255, 240, 40), rgb(60, 255, 90),
-                   rgb(40, 220, 255), rgb(70, 90, 255), rgb(190, 70, 255)),
-        Transparency = ns({ 0, 0.1 }, { 1, 1 }),
-        WidthScale = ns({ 0, 1 }, { 1, 0.2 }),
-    })
-end
-
-TrailBuilders.Inferno = function(hrp)
-    mkTrail(hrp, 1.0, -1.0, {
-        Lifetime = 0.6, LightEmission = 1,
-        Color = cs(rgb(255, 220, 80), rgb(255, 90, 0), rgb(90, 0, 0)),
-        Transparency = ns({ 0, 0.1 }, { 0.7, 0.5 }, { 1, 1 }),
-        WidthScale = ns({ 0, 1 }, { 1, 0 }),
-    })
-    mkEmit(hrp, -1.6, {
-        Texture = TEX_FIRE, Color = cs(rgb(255, 200, 60), rgb(255, 80, 0), rgb(80, 0, 0)),
-        Size = ns({ 0, 1.7 }, { 1, 0 }), Transparency = ns({ 0, 0.2 }, { 0.7, 0.6 }, { 1, 1 }),
-        Lifetime = NumberRange.new(0.6, 1), Speed = NumberRange.new(1, 3),
-        SpreadAngle = Vector2.new(25, 25), EmissionDirection = Enum.NormalId.Top,
-        Acceleration = Vector3.new(0, 6, 0), Rotation = NumberRange.new(0, 360),
-        LightEmission = 1, LightInfluence = 0,
-    }, 40, 0.3)
-    mkEmit(hrp, -1, {
-        Texture = TEX_SPARK, Color = cs(rgb(255, 150, 40), rgb(255, 40, 0)),
-        Size = ns({ 0, 0.3 }, { 1, 0 }), Transparency = ns({ 0, 0 }, { 1, 1 }),
-        Lifetime = NumberRange.new(0.8, 1.6), Speed = NumberRange.new(2, 5),
-        SpreadAngle = Vector2.new(60, 60), EmissionDirection = Enum.NormalId.Top,
-        Acceleration = Vector3.new(0, 4, 0), LightEmission = 1, LightInfluence = 0,
-    }, 15, 0.2)
-end
-
-TrailBuilders.Stardust = function(hrp)
-    mkTrail(hrp, 1.0, -1.0, {
-        Lifetime = 1.2, LightEmission = 1,
-        Color = cs(rgb(200, 150, 255), rgb(110, 90, 255), rgb(70, 200, 255)),
-        Transparency = ns({ 0, 0.3 }, { 1, 1 }),
-        WidthScale = ns({ 0, 1 }, { 1, 0 }),
-    })
-    mkEmit(hrp, 0, {
-        Texture = TEX_SPARK, Color = cs(rgb(215, 160, 255), rgb(120, 200, 255)),
-        Size = ns({ 0, 0.5 }, { 1, 0 }), Transparency = ns({ 0, 0 }, { 0.8, 0.3 }, { 1, 1 }),
-        Lifetime = NumberRange.new(1, 2), Speed = NumberRange.new(0.5, 2),
-        SpreadAngle = Vector2.new(180, 180), Rotation = NumberRange.new(0, 360),
-        RotSpeed = NumberRange.new(-120, 120), LightEmission = 1, LightInfluence = 0,
-    }, 45, 0.25)
-end
-
-TrailBuilders.Frost = function(hrp)
-    mkTrail(hrp, 1.0, -1.0, {
-        Lifetime = 0.7, LightEmission = 0.5,
-        Color = cs(C.White, rgb(200, 235, 255), rgb(120, 190, 255)),
-        Transparency = ns({ 0, 0.2 }, { 1, 1 }),
-        WidthScale = ns({ 0, 1 }, { 1, 0 }),
-    })
-    mkEmit(hrp, 0.5, {
-        Texture = TEX_SPARK, Color = cs(C.White, rgb(160, 210, 255)),
-        Size = ns({ 0, 0.3 }, { 1, 0.05 }), Transparency = ns({ 0, 0 }, { 1, 1 }),
-        Lifetime = NumberRange.new(1, 2), Speed = NumberRange.new(0.5, 2),
-        SpreadAngle = Vector2.new(180, 180), Acceleration = Vector3.new(0, -2, 0),
-        LightEmission = 0.8, LightInfluence = 0,
-    }, 35, 0.2)
-    mkEmit(hrp, -2.7, {
-        Texture = TEX_SMOKE, Color = cs(rgb(215, 235, 255), rgb(150, 200, 255)),
-        Size = ns({ 0, 2 }, { 1, 5 }), Transparency = ns({ 0, 0.7 }, { 1, 1 }),
-        Lifetime = NumberRange.new(1.5, 2.5), Speed = NumberRange.new(0.3, 1.5),
-        SpreadAngle = Vector2.new(90, 90), EmissionDirection = Enum.NormalId.Top,
-        Drag = 2, Rotation = NumberRange.new(0, 360), LightEmission = 0.3, LightInfluence = 0,
-    }, 14, 0.3)
-end
-
-local function applyTrail()
-    clearTrail()
-    if not State.Trail then return end
-    local hrp = myRoot()
-    if not hrp then return end
-    local builder = TrailBuilders[State.TrailStyle] or TrailBuilders.Default
-    builder(hrp)
-end
-onCleanup(clearTrail)
-
--- emitters react to movement speed
-track(RunService.Heartbeat:Connect(function()
-    if #trailEmit == 0 then return end
-    local hrp = myRoot()
-    if not hrp then return end
-    local v = hrp.AssemblyLinearVelocity
-    local f = math.clamp(Vector3.new(v.X, 0, v.Z).Magnitude / 14, 0, 1)
-    for _, r in ipairs(trailEmit) do
-        if r.e.Parent then r.e.Rate = r.base * (r.idle + (1 - r.idle) * f) end
+-- recolor registry: every colored object registers a function(color)
+local function newPaint(col)
+    local P = { fns = {}, col = col }
+    function P.add(fn) P.fns[#P.fns + 1] = fn fn(P.col) end
+    function P.part(p, mix) P.add(function(c) p.Color = c:Lerp(C.White, mix) end) end
+    function P.set(c)
+        P.col = c
+        for _, f in ipairs(P.fns) do pcall(f, c) end
     end
-end))
-
--- ==================== FUN: SANDEVISTAN ====================
-local SANDY_GREEN = rgb(110, 255, 150)
-local SANDY_LIFE, SANDY_MAX = 0.65, 16
-local sandyGhosts, sandyHL, sandyCC = {}, nil, nil
-local sandyLastPos, sandyLastT = nil, 0
-
-local sandyFlash = new("Frame", {
-    Name = "AbaddonSandyFlash", Size = UDim2.fromScale(1, 1), BackgroundColor3 = rgb(210, 255, 225),
-    BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 900, Active = false,
-}, ScreenGui)
-
-local function sandyFlashFx()
-    sandyFlash.BackgroundColor3 = rgb(215, 255, 228)
-    sandyFlash.BackgroundTransparency = 0.05
-    tween(sandyFlash, 0.8, { BackgroundTransparency = 1, BackgroundColor3 = SANDY_GREEN }, Enum.EasingStyle.Quad)
-    local blur = Instance.new("BlurEffect")
-    blur.Name = "AbaddonSandyBlur"
-    blur.Size = 30
-    blur.Parent = Lighting
-    tween(blur, 0.8, { Size = 0 })
-    Debris:AddItem(blur, 1)
+    return P
 end
 
-local function playSandySound()
-    local s = Instance.new("Sound")
-    s.SoundId = SANDY_SOUND
-    s.Volume = 2
-    s.Parent = SoundService
-    s:Play()
-    Debris:AddItem(s, 15)
+-- regular polygon / ring from neon blocks (n = 6 gives a hexagon, n = 48 a smooth ring)
+local function polyRing(cont, r, th, n, fill, transp, paint, mixFn)
+    local half = math.pi / n
+    local chord = 2 * r * math.sin(half)
+    local rad = r * math.cos(half)
+    local segs = {}
+    for i = 0, n - 1 do
+        local a = (i / n) * 2 * math.pi + half
+        local pos = Vector3.new(math.cos(a) * rad, 0, math.sin(a) * rad)
+        local tan = Vector3.new(-math.sin(a), 0, math.cos(a))
+        local s = newPart(cont, Vector3.new(th, th, chord * fill))
+        s.Transparency = transp
+        weld(cont, s, CFrame.lookAt(pos, pos + tan))
+        paint.part(s, mixFn and mixFn(i, n) or 0)
+        segs[#segs + 1] = s
+    end
+    return segs
 end
 
-local function sandyPalette(on)
-    if on then
-        if not sandyCC then
-            sandyCC = Instance.new("ColorCorrectionEffect")
-            sandyCC.Name = "AbaddonSandyCC"
-            sandyCC.Parent = Lighting
+local function lineSeg(cont, p1, p2, th, transp, paint, mix)
+    local s = newPart(cont, Vector3.new(th, th, (p2 - p1).Magnitude))
+    s.Transparency = transp
+    weld(cont, s, CFrame.lookAt((p1 + p2) / 2, p2))
+    paint.part(s, mix or 0)
+    return s
+end
+
+local function sparkMix(i, n) return 0.6 * (0.5 + 0.5 * math.sin(i / n * math.pi * 6)) end
+local NR, V2 = NumberRange.new, Vector2.new
+
+-- ==================== COSMETICS: HALO ====================
+do
+    local root, rootW, anims, paint = nil, nil, {}, nil
+    Fx.HALO_STYLES = { "Classic", "Double", "Cyber", "Orbit", "Crown", "Inferno" }
+
+    local function haloCol() return hexToColor3(State.HaloColorHex) or rgb(255, 215, 106) end
+
+    local function clear()
+        if root then pcall(function() root:Destroy() end) end
+        root, rootW, anims, paint = nil, nil, {}, nil
+    end
+
+    local function build()
+        clear()
+        if not State.Halo then return end
+        local char = LocalPlayer.Character
+        local head = char and char:FindFirstChild("Head")
+        local folder = fxFolder()
+        if not head or not folder then return end
+
+        paint = newPaint(haloCol())
+        root = newPart(folder, Vector3.new(0.3, 0.3, 0.3))
+        root.Name = "AbaddonHalo"
+        rootW = weld(head, root, CFrame.new(0, 1.55, 0))
+
+        local function ring(r, th, n, fill, transp, tilt, spin, prec, mixFn)
+            tilt = tilt or Vector3.zero
+            local cont = newPart(root)
+            local w = weld(root, cont)
+            polyRing(cont, r, th, n, fill, transp, paint, mixFn)
+            anims[#anims + 1] = function(t)
+                w.C0 = CFrame.Angles(0, t * (prec or 0), 0)
+                    * CFrame.Angles(tilt.X, tilt.Y, tilt.Z)
+                    * CFrame.Angles(0, t * (spin or 0), 0)
+            end
         end
-        tween(sandyCC, 0.5, {
-            TintColor = rgb(150, 255, 175), Saturation = 0.15, Contrast = 0.18, Brightness = 0.02,
-        })
-    elseif sandyCC then
-        local cc = sandyCC
-        sandyCC = nil
-        tween(cc, 0.5, { TintColor = C.White, Saturation = 0, Contrast = 0, Brightness = 0 })
-        task.delay(0.55, function() pcall(function() cc:Destroy() end) end)
-    end
-end
 
-local function clearGhosts()
-    for _, g in ipairs(sandyGhosts) do pcall(function() g.vp:Destroy() end) end
-    sandyGhosts = {}
-end
+        local function orb(r, size, speed, phase, tilt)
+            local cont = newPart(root)
+            local w = weld(root, cont)
+            local o = newPart(cont, Vector3.new(size, size, size))
+            o.Shape = Enum.PartType.Ball
+            o.Transparency = 0
+            weld(cont, o, CFrame.new(r, 0, 0))
+            paint.part(o, 0.55)
+            local tr = Instance.new("Trail")
+            tr.Attachment0 = att(o, Vector3.new(0, size * 0.5, 0))
+            tr.Attachment1 = att(o, Vector3.new(0, -size * 0.5, 0))
+            tr.Lifetime, tr.LightEmission, tr.LightInfluence = 0.6, 1, 0
+            tr.Transparency = ns({ 0, 0.1 }, { 1, 1 })
+            tr.WidthScale = ns({ 0, 1 }, { 1, 0 })
+            tr.FaceCamera = true
+            tr.Parent = o
+            paint.add(function(c) tr.Color = cs(c:Lerp(C.White, 0.5), c) end)
+            anims[#anims + 1] = function(t)
+                w.C0 = CFrame.Angles(tilt.X, tilt.Y, tilt.Z) * CFrame.Angles(0, phase + t * speed, 0)
+            end
+        end
 
-local function spawnGhost()
-    local char = LocalPlayer.Character
-    if not char then return end
-    local vp = Instance.new("ViewportFrame")
-    vp.Name = "AbaddonGhost"
-    vp.Size = UDim2.fromScale(1, 1)
-    vp.BackgroundTransparency = 1
-    vp.BorderSizePixel = 0
-    vp.ZIndex = 2
-    vp.Active = false
-    vp.Ambient = rgb(120, 255, 160)
-    vp.LightColor = rgb(150, 255, 180)
-    vp.ImageColor3 = rgb(120, 255, 160)
-    vp.ImageTransparency = 0.4
-
-    local count = 0
-    for _, p in ipairs(char:GetDescendants()) do
-        if p:IsA("BasePart") and p.Name ~= "HumanoidRootPart" and p.Name ~= "AbaddonHalo" and p.Transparency < 0.95 then
-            local ok, c = pcall(function() return p:Clone() end)
-            if ok and c then
-                for _, d in ipairs(c:GetChildren()) do
-                    if not d:IsA("DataModelMesh") then d:Destroy() end
-                    if d:IsA("SpecialMesh") then pcall(function() d.TextureId = "" end) end
+        local function sparkles(r, cnt, rate, fire)
+            for i = 0, cnt - 1 do
+                local a = i / cnt * 2 * math.pi
+                local at = att(root, Vector3.new(math.cos(a) * r, 0, math.sin(a) * r))
+                local e
+                if fire then
+                    e = emitter(at, {
+                        Texture = TEX_FIRE, Size = ns({ 0, 0.6 }, { 1, 0 }),
+                        Transparency = ns({ 0, 0.2 }, { 0.7, 0.6 }, { 1, 1 }),
+                        Lifetime = NR(0.5, 0.9), Speed = NR(0.5, 1.5),
+                        Acceleration = Vector3.new(0, 3, 0), EmissionDirection = Enum.NormalId.Top,
+                        SpreadAngle = V2(15, 15), Rotation = NR(0, 360), Rate = rate,
+                    })
+                    paint.add(function(c) e.Color = cs(c:Lerp(C.White, 0.6), c, c:Lerp(C.Black, 0.6)) end)
+                else
+                    e = emitter(at, {
+                        Size = ns({ 0, 0.18 }, { 1, 0 }), Transparency = ns({ 0, 0 }, { 0.7, 0.4 }, { 1, 1 }),
+                        Lifetime = NR(1, 1.6), Speed = NR(0.2, 0.6), SpreadAngle = V2(30, 30),
+                        EmissionDirection = Enum.NormalId.Top, Acceleration = Vector3.new(0, 0.6, 0),
+                        Rotation = NR(0, 360), RotSpeed = NR(-90, 90), Rate = rate,
+                    })
+                    paint.add(function(c) e.Color = cs(c:Lerp(C.White, 0.4), c) end)
                 end
-                pcall(function() if c:IsA("MeshPart") then c.TextureID = "" end end)
-                c.Anchored, c.CanCollide, c.CanQuery, c.CanTouch = true, false, false, false
-                c.CastShadow = false
-                c.Transparency = 0
-                c.Material = Enum.Material.Neon
-                c.Color = SANDY_GREEN
-                c.Parent = vp
-                count = count + 1
+            end
+        end
+
+        local st = State.HaloStyle
+        if st == "Double" then
+            ring(1.2, 0.08, 48, 1.03, 0.05, Vector3.new(0.28, 0, 0.1), 0, 0.6, sparkMix)
+            ring(1.0, 0.06, 40, 1.03, 0.1, Vector3.new(-0.28, 0, -0.1), 0, -0.6, sparkMix)
+            ring(1.2, 0.4, 48, 1, 0.88, Vector3.new(0.28, 0, 0.1), 0, 0.6)
+            sparkles(1.1, 6, 3)
+        elseif st == "Cyber" then
+            ring(1.3, 0.07, 24, 0.55, 0.05, Vector3.new(0.05, 0, 0), 1.6, 0, sparkMix)
+            ring(1.08, 0.07, 20, 0.5, 0.05, Vector3.new(0, 0, 0.05), -2.4, 0, sparkMix)
+            ring(0.86, 0.06, 16, 0.45, 0.05, nil, 3.2, 0)
+            ring(1.3, 0.3, 48, 1, 0.9)
+            sparkles(1.3, 4, 2)
+        elseif st == "Orbit" then
+            ring(1.1, 0.05, 48, 1.03, 0.15, Vector3.new(0.12, 0, 0), 0, 0.4)
+            ring(1.1, 0.3, 48, 1, 0.9, Vector3.new(0.12, 0, 0), 0, 0.4)
+            for i = 0, 2 do orb(1.1, 0.22, 2.2, i * 2.094, Vector3.new(0.12, 0, 0)) end
+            orb(0.85, 0.15, -3, math.pi, Vector3.new(-0.5, 0, 0.3))
+            orb(0.85, 0.15, -3, 0, Vector3.new(-0.5, 0, 0.3))
+        elseif st == "Crown" then
+            ring(1.0, 0.1, 40, 1.03, 0.05, nil, 0, 0, sparkMix)
+            ring(1.0, 0.45, 40, 1, 0.88)
+            local cont = newPart(root)
+            local w = weld(root, cont)
+            for i = 0, 7 do
+                local a = i / 8 * 2 * math.pi
+                local base = CFrame.Angles(0, -a, 0) * CFrame.new(1.0, 0.38, 0) * CFrame.Angles(0, 0, -0.18)
+                local sp = newPart(cont, Vector3.new(0.12, 0.75, 0.12))
+                sp.Transparency = 0.05
+                weld(cont, sp, base)
+                paint.part(sp, 0.2)
+                local tip = newPart(cont, Vector3.new(0.2, 0.2, 0.2))
+                tip.Shape = Enum.PartType.Ball
+                tip.Transparency = 0
+                weld(cont, tip, base * CFrame.new(0, 0.42, 0))
+                paint.part(tip, 0.8)
+            end
+            anims[#anims + 1] = function(t) w.C0 = CFrame.Angles(0, t * 0.5, 0) end
+            sparkles(1.0, 4, 2)
+        elseif st == "Inferno" then
+            ring(1.05, 0.07, 40, 1.03, 0.1, nil, 0, 0, sparkMix)
+            ring(1.05, 0.35, 40, 1, 0.9)
+            sparkles(1.05, 10, 14, true)
+            sparkles(0.9, 6, 5)
+        else -- Classic
+            ring(1.1, 0.09, 48, 1.03, 0.05, nil, 0, 0, sparkMix)
+            ring(1.1, 0.45, 48, 1, 0.87)
+            ring(0.8, 0.04, 36, 1.03, 0.4, nil, 0, 0)
+            sparkles(1.1, 8, 3)
+        end
+
+        local light = Instance.new("PointLight")
+        light.Brightness, light.Range = 1.3, 10
+        light.Parent = root
+        paint.add(function(c) light.Color = c end)
+    end
+
+    track(RunService.RenderStepped:Connect(function()
+        if not root or not rootW or not rootW.Parent then return end
+        local t = os.clock()
+        rootW.C0 = CFrame.new(0, 1.55 + math.sin(t * 2) * 0.06, 0)
+            * CFrame.Angles(math.rad(5) * math.sin(t * 1.3), 0, math.rad(4) * math.cos(t * 1.1))
+        for _, f in ipairs(anims) do f(t) end
+    end))
+
+    Fx.buildHalo = build
+    Fx.setHalo = function(on) State.Halo = on build() end
+    Fx.updateHaloColor = function() if paint then paint.set(haloCol()) end end
+    onCleanup(clear)
+end
+
+-- ==================== COSMETICS: PARTICLE WINGS (replaces Trail) ====================
+do
+    local wings, feathers, rainbow = {}, {}, {}
+    local phase = 0
+    local HY, HZ = 0.5, 0.6
+    Fx.WING_STYLES = { "Angelic", "Demon", "Phoenix", "Cyber", "Void", "Frost", "Rainbow" }
+
+    local CFG = {
+        Angelic = { n = 9, len = 1.0, curve = 0.16, w0 = 0.26, w1 = 0.03, flap = 1.0,
+            bc = cs(C.White, rgb(255, 238, 180)), pc = cs(C.White, rgb(255, 225, 140)),
+            psize = 0.22, plife = 1.5, pspeed = 0.8, pacc = Vector3.new(0, -0.8, 0), prate = 3 },
+        Demon = { n = 7, len = 1.15, curve = 0.05, w0 = 0.3, w1 = 0.01, flap = 0.75,
+            bc = cs(rgb(255, 60, 40), rgb(60, 0, 0)), pc = cs(rgb(255, 140, 40), rgb(140, 0, 0)),
+            psize = 0.3, plife = 1.2, pspeed = 1.5, pacc = Vector3.new(0, 2.5, 0), prate = 4 },
+        Phoenix = { n = 10, len = 1.1, curve = 0.22, w0 = 0.28, w1 = 0.03, flap = 1.3,
+            bc = cs(rgb(255, 245, 150), rgb(255, 120, 0), rgb(160, 20, 0)), pc = cs(rgb(255, 210, 80), rgb(255, 60, 0)),
+            psize = 0.7, plife = 0.9, pspeed = 1.2, pacc = Vector3.new(0, 4, 0), prate = 5, tex = TEX_FIRE },
+        Cyber = { n = 8, len = 0.95, curve = 0, w0 = 0.12, w1 = 0.12, flap = 1.7,
+            bc = cs(rgb(0, 255, 255), rgb(255, 0, 200)), pc = cs(rgb(0, 255, 255), rgb(255, 0, 200)),
+            psize = 0.18, plife = 0.8, pspeed = 0.5, pacc = Vector3.zero, prate = 4 },
+        Void = { n = 9, len = 1.1, curve = 0.2, w0 = 0.28, w1 = 0.02, flap = 0.85,
+            bc = cs(rgb(170, 90, 255), rgb(25, 0, 50)), pc = cs(rgb(200, 130, 255), rgb(40, 0, 80)),
+            psize = 1.2, plife = 1.6, pspeed = 0.6, pacc = Vector3.new(0, 1.2, 0), prate = 2, tex = TEX_SMOKE, le = 0.2 },
+        Frost = { n = 9, len = 1.0, curve = 0.14, w0 = 0.24, w1 = 0.02, flap = 0.9,
+            bc = cs(C.White, rgb(120, 195, 255)), pc = cs(C.White, rgb(160, 215, 255)),
+            psize = 0.2, plife = 1.8, pspeed = 0.6, pacc = Vector3.new(0, -1.6, 0), prate = 3 },
+        Rainbow = { n = 9, len = 1.05, curve = 0.18, w0 = 0.26, w1 = 0.03, flap = 1.1, rainbow = true,
+            bc = cs(C.White, C.White), pc = cs(C.White, rgb(255, 190, 255)),
+            psize = 0.22, plife = 1.4, pspeed = 0.8, pacc = Vector3.new(0, -0.6, 0), prate = 3 },
+    }
+
+    local function clear()
+        for _, wg in ipairs(wings) do pcall(function() wg.cont:Destroy() end) end
+        wings, feathers, rainbow = {}, {}, {}
+    end
+
+    local function build()
+        clear()
+        if not State.Wings then return end
+        local char = LocalPlayer.Character
+        local torso = char and (char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso"))
+        local folder = fxFolder()
+        if not torso or not folder then return end
+        local cfg = CFG[State.WingStyle] or CFG.Angelic
+        local S = (State.WingSize or 100) / 100
+
+        for _, side in ipairs({ 1, -1 }) do
+            local cont = newPart(folder)
+            cont.Name = "AbaddonWing"
+            local w = weld(torso, cont, CFrame.new(side * 0.3, HY, HZ))
+            wings[#wings + 1] = { w = w, side = side, cont = cont }
+
+            -- arm (leading edge)
+            local wrist = Vector3.new(side * 0.9, 0.6, 0) * S * 1.8
+            local ab = Instance.new("Beam")
+            ab.Attachment0, ab.Attachment1 = att(cont, Vector3.zero), att(cont, wrist)
+            ab.Width0, ab.Width1 = 0.2 * S, 0.12 * S
+            ab.FaceCamera, ab.LightEmission, ab.LightInfluence, ab.Segments = true, 1, 0, 1
+            ab.Color = cfg.bc
+            ab.Transparency = NumberSequence.new(0.1)
+            ab.Parent = cont
+            if cfg.rainbow then rainbow[#rainbow + 1] = { b = ab, t = 0 } end
+
+            for layer = 1, 2 do
+                local lscale = layer == 1 and 1 or 0.62
+                for i = 0, cfg.n - 1 do
+                    local t = layer == 1 and (i / (cfg.n - 1)) or ((i + 0.5) / cfg.n)
+                    local phi = math.rad(35 + 115 * t)
+                    local dir = Vector3.new(side * math.sin(phi), math.cos(phi), 0)
+                    local len = S * cfg.len * lscale * (2.0 + 2.2 * math.sin(t * math.pi * 0.85 + 0.2))
+                    local basePos = Vector3.new(side * 0.9, 0.6, 0) * (S * t * 1.8)
+                    local a0 = att(cont, basePos, CFrame.Angles(0, 0, math.rad(90)))
+                    local a1 = att(cont, basePos + dir * len)
+
+                    local b = Instance.new("Beam")
+                    b.Attachment0, b.Attachment1 = a0, a1
+                    b.Width0 = cfg.w0 * S * (layer == 1 and 1 or 1.3)
+                    b.Width1 = cfg.w1
+                    b.CurveSize0 = -len * cfg.curve
+                    b.CurveSize1 = 0
+                    b.Segments = cfg.curve == 0 and 1 or 12
+                    b.FaceCamera, b.LightEmission, b.LightInfluence = true, 1, 0
+                    b.Color = cfg.bc
+                    b.Transparency = ns(
+                        { 0, layer == 1 and 0.05 or 0.35 },
+                        { 0.7, layer == 1 and 0.25 or 0.55 },
+                        { 1, 0.92 })
+                    b.Parent = cont
+
+                    feathers[#feathers + 1] = { a1 = a1, base = basePos, phi = phi, len = len, side = side, t = t }
+                    if cfg.rainbow then rainbow[#rainbow + 1] = { b = b, t = t } end
+
+                    if layer == 1 then
+                        local props = {
+                            Color = cfg.pc, Size = ns({ 0, cfg.psize * S }, { 1, 0 }),
+                            Transparency = ns({ 0, 0.1 }, { 0.6, 0.4 }, { 1, 1 }),
+                            Lifetime = NR(cfg.plife * 0.6, cfg.plife), Speed = NR(0, cfg.pspeed),
+                            SpreadAngle = V2(180, 180), Acceleration = cfg.pacc, Rate = cfg.prate,
+                            Rotation = NR(0, 360), RotSpeed = NR(-80, 80), LightEmission = cfg.le or 1,
+                        }
+                        if cfg.tex then props.Texture = cfg.tex end
+                        emitter(a1, props)
+                    end
+                end
             end
         end
     end
-    if count == 0 then vp:Destroy() return end
 
-    local vcam = Instance.new("Camera")
-    vcam.Parent = vp
-    vp.CurrentCamera = vcam
-    local wc = workspace.CurrentCamera
-    if wc then vcam.CFrame, vcam.FieldOfView = wc.CFrame, wc.FieldOfView end
-    vp.Parent = ScreenGui
+    track(RunService.RenderStepped:Connect(function(dt)
+        if #wings == 0 then return end
+        local cfg = CFG[State.WingStyle] or CFG.Angelic
+        local hrp = myRoot()
+        local f = 0
+        if hrp then f = math.clamp(hrp.AssemblyLinearVelocity.Magnitude / 18, 0, 1.5) end
 
-    sandyGhosts[#sandyGhosts + 1] = { vp = vp, cam = vcam, born = os.clock() }
-    while #sandyGhosts > SANDY_MAX do
-        local old = table.remove(sandyGhosts, 1)
-        pcall(function() old.vp:Destroy() end)
-    end
+        phase = phase + dt * cfg.flap * (2.2 + 4.5 * f)
+        local flap = math.sin(phase)
+        local back = math.rad(34) - math.rad(14) * math.min(f, 1) + flap * math.rad(8)
+        local roll = math.rad(10) + flap * math.rad(14 + 18 * f)
+
+        for _, wg in ipairs(wings) do
+            if wg.w.Parent then
+                wg.w.C0 = CFrame.new(wg.side * 0.3, HY, HZ) * CFrame.Angles(0, -wg.side * back, wg.side * roll)
+            end
+        end
+
+        -- feathers ripple like a wave
+        local amp = 0.05 + 0.08 * f
+        for _, fe in ipairs(feathers) do
+            if fe.a1.Parent then
+                local p = fe.phi + math.sin(phase - fe.t * 2.5) * amp
+                fe.a1.Position = fe.base + Vector3.new(fe.side * math.sin(p), math.cos(p), 0) * fe.len
+            end
+        end
+
+        if cfg.rainbow then
+            local now = os.clock() * 0.15
+            for _, r in ipairs(rainbow) do
+                if r.b.Parent then
+                    local h = (now + r.t * 0.5) % 1
+                    r.b.Color = cs(Color3.fromHSV(h, 0.6, 1), Color3.fromHSV((h + 0.2) % 1, 0.9, 1))
+                end
+            end
+        end
+    end))
+
+    Fx.buildWings = build
+    onCleanup(clear)
 end
 
-track(RunService.RenderStepped:Connect(function()
-    local now = os.clock()
-    local wc = workspace.CurrentCamera
+-- ==================== COSMETICS: AURA ====================
+do
+    local root
+    Fx.AURA_STYLES = { "Spirit", "Flame", "Storm", "Void", "Sakura" }
+    local UP = Enum.NormalId.Top
 
-    if State.Sandevistan then
+    local PRESETS = {
+        Spirit = { r = 1.4, n = 6, p = {
+            Texture = TEX_SMOKE, Color = cs(rgb(235, 250, 255), rgb(120, 200, 255)),
+            Size = ns({ 0, 1.0 }, { 1, 2.2 }), Transparency = ns({ 0, 0.65 }, { 0.5, 0.8 }, { 1, 1 }),
+            Lifetime = NR(1.2, 2), Speed = NR(0.3, 1), Acceleration = Vector3.new(0, 2.2, 0),
+            SpreadAngle = V2(25, 25), EmissionDirection = UP, Rotation = NR(0, 360),
+            RotSpeed = NR(-30, 30), LightEmission = 0.7, Rate = 4 } },
+        Flame = { r = 1.1, n = 7, p = {
+            Texture = TEX_FIRE, Color = cs(rgb(255, 210, 70), rgb(255, 80, 0), rgb(60, 0, 0)),
+            Size = ns({ 0, 1.5 }, { 1, 0 }), Transparency = ns({ 0, 0.25 }, { 0.7, 0.6 }, { 1, 1 }),
+            Lifetime = NR(0.6, 1), Speed = NR(1, 3), Acceleration = Vector3.new(0, 5, 0),
+            SpreadAngle = V2(18, 18), EmissionDirection = UP, Rotation = NR(0, 360), Rate = 8 } },
+        Storm = { r = 1.3, n = 6, p = {
+            Color = cs(rgb(150, 220, 255), C.White), Size = ns({ 0, 0.28 }, { 1, 0 }),
+            Transparency = ns({ 0, 0 }, { 1, 1 }), Lifetime = NR(0.35, 0.7), Speed = NR(5, 10),
+            SpreadAngle = V2(30, 30), EmissionDirection = UP, Rotation = NR(0, 360),
+            RotSpeed = NR(-300, 300), Rate = 10 } },
+        Void = { r = 1.3, n = 6, p = {
+            Texture = TEX_SMOKE, Color = cs(rgb(150, 80, 255), rgb(10, 0, 25)),
+            Size = ns({ 0, 1.6 }, { 1, 4 }), Transparency = ns({ 0, 0.55 }, { 1, 1 }),
+            Lifetime = NR(1.5, 2.5), Speed = NR(0.3, 1.3), Acceleration = Vector3.new(0, 1.6, 0),
+            SpreadAngle = V2(35, 35), EmissionDirection = UP, Rotation = NR(0, 360),
+            RotSpeed = NR(-25, 25), LightEmission = 0.25, Rate = 4 } },
+        Sakura = { top = true, r = 2.4, n = 6, p = {
+            Color = cs(rgb(255, 160, 195), rgb(255, 225, 235)), Size = ns({ 0, 0.38 }, { 0.5, 0.34 }, { 1, 0 }),
+            Transparency = ns({ 0, 0.15 }, { 0.8, 0.25 }, { 1, 1 }), Lifetime = NR(2, 3.2),
+            Speed = NR(0.2, 1), Acceleration = Vector3.new(0, -0.8, 0), SpreadAngle = V2(180, 180),
+            Rotation = NR(0, 360), RotSpeed = NR(-200, 200), LightEmission = 0.45, Rate = 2 } },
+    }
+
+    local function clear()
+        if root then pcall(function() root:Destroy() end) end
+        root = nil
+    end
+
+    local function build()
+        clear()
+        if not State.Aura then return end
         local char = LocalPlayer.Character
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        if sandyHL and char and sandyHL.Adornee ~= char then sandyHL.Adornee = char end
-        if hrp then
-            local pos = hrp.Position
-            if (not sandyLastPos or (pos - sandyLastPos).Magnitude >= 1.4) and now - sandyLastT > 0.04 then
-                if sandyLastPos then pcall(spawnGhost) end
-                sandyLastPos, sandyLastT = pos, now
+        local folder = fxFolder()
+        if not hrp or not folder then return end
+        local pr = PRESETS[State.AuraStyle] or PRESETS.Spirit
+        root = newPart(folder)
+        root.Name = "AbaddonAura"
+        weld(hrp, root)
+        local y = pr.top and 2.4 or (floorOff() + 0.3)
+        for i = 0, pr.n - 1 do
+            local a = i / pr.n * 2 * math.pi
+            local at = att(root, Vector3.new(math.cos(a) * pr.r, y, math.sin(a) * pr.r))
+            emitter(at, pr.p)
+        end
+    end
+
+    Fx.buildAura = build
+    onCleanup(clear)
+end
+
+-- ==================== COSMETICS: RUNE CIRCLE (floor) ====================
+do
+    local root, rootW, anims, paint, fo = nil, nil, {}, nil, -3
+    Fx.RUNE_STYLES = { "Hex", "Sigil", "Ripple", "Solar" }
+
+    local function runeCol() return hexToColor3(State.RuneColorHex) or rgb(176, 107, 255) end
+
+    local function clear()
+        if root then pcall(function() root:Destroy() end) end
+        root, rootW, anims, paint = nil, nil, {}, nil
+    end
+
+    local function build()
+        clear()
+        if not State.Rune then return end
+        local char = LocalPlayer.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        local folder = fxFolder()
+        if not hrp or not folder then return end
+        fo = floorOff() + 0.1
+        paint = newPaint(runeCol())
+        root = newPart(folder)
+        root.Name = "AbaddonRune"
+        rootW = weld(hrp, root)
+
+        local function ring(r, th, n, fill, transp, spin, phase)
+            local cont = newPart(root)
+            local w = weld(root, cont)
+            local segs = polyRing(cont, r, th, n, fill, transp, paint)
+            anims[#anims + 1] = function(t) w.C0 = CFrame.Angles(0, (phase or 0) + t * spin, 0) end
+            return segs
+        end
+        local function spinner(spin)
+            local cont = newPart(root)
+            local w = weld(root, cont)
+            anims[#anims + 1] = function(t) w.C0 = CFrame.Angles(0, t * spin, 0) end
+            return cont
+        end
+
+        local st = State.RuneStyle
+        if st == "Sigil" then
+            ring(3.3, 0.08, 48, 1.03, 0.1, 0.1)
+            ring(3.0, 0.04, 48, 1.03, 0.3, -0.1)
+            local c = spinner(0.25)
+            local pts = {}
+            for k = 0, 4 do
+                local a = k * 2 * math.pi / 5 - math.pi / 2
+                pts[k] = Vector3.new(math.cos(a) * 2.9, 0, math.sin(a) * 2.9)
+            end
+            for k = 0, 4 do lineSeg(c, pts[k], pts[(k + 2) % 5], 0.07, 0.1, paint, 0.2) end
+            ring(1.1, 0.06, 5, 1.04, 0.1, -0.6)
+            ring(3.3, 0.5, 48, 1, 0.9, 0)
+        elseif st == "Ripple" then
+            local rings = {}
+            for k = 0, 3 do rings[k] = ring(1.0 + k * 0.8, 0.08, 40, 1.03, 0.5, 0) end
+            anims[#anims + 1] = function(t)
+                for k = 0, 3 do
+                    local v = 0.5 + 0.5 * math.sin(t * 3 - k * 1.1)
+                    local tr = 0.9 - 0.85 * v
+                    for _, s in ipairs(rings[k]) do s.Transparency = tr end
+                end
+            end
+        elseif st == "Solar" then
+            ring(3.0, 0.08, 48, 1.03, 0.1, 0.2)
+            ring(1.3, 0.1, 48, 1.03, 0.1, -0.3)
+            ring(2.4, 0.05, 32, 0.5, 0.2, 0.9)
+            local c = spinner(0.6)
+            for k = 0, 15 do
+                local a = k / 16 * 2 * math.pi
+                local d = Vector3.new(math.cos(a), 0, math.sin(a))
+                local long = k % 2 == 0
+                lineSeg(c, d * 1.6, d * (long and 2.7 or 2.2), long and 0.1 or 0.06, 0.1, paint, 0.3)
+            end
+            ring(3.0, 0.5, 48, 1, 0.9, 0)
+        else -- Hex
+            ring(3.2, 0.08, 48, 1.03, 0.1, 0.15)
+            ring(2.9, 0.07, 6, 1.04, 0.1, 0.45)
+            ring(2.9, 0.07, 6, 1.04, 0.1, -0.45, math.pi / 6)
+            ring(1.6, 0.06, 20, 0.5, 0.1, 1.2)
+            ring(3.2, 0.5, 48, 1, 0.9, 0)
+        end
+
+        local at = att(root, Vector3.zero)
+        local e = emitter(at, {
+            Size = ns({ 0, 0.22 }, { 1, 0 }), Transparency = ns({ 0, 0 }, { 0.7, 0.4 }, { 1, 1 }),
+            Lifetime = NR(1, 1.6), Speed = NR(2, 4), Acceleration = Vector3.new(0, 1, 0),
+            SpreadAngle = V2(25, 25), EmissionDirection = Enum.NormalId.Top, Rotation = NR(0, 360), Rate = 8,
+        })
+        paint.add(function(c) e.Color = cs(c:Lerp(C.White, 0.5), c) end)
+        local light = Instance.new("PointLight")
+        light.Brightness, light.Range = 1, 14
+        light.Parent = root
+        paint.add(function(c) light.Color = c end)
+    end
+
+    -- keeps the circle flat on the ground, independent of the character's rotation
+    track(RunService.RenderStepped:Connect(function()
+        if not root or not rootW or not rootW.Parent then return end
+        local hrp = myRoot()
+        if not hrp then return end
+        local t = os.clock()
+        rootW.C0 = hrp.CFrame:Inverse() * CFrame.new(hrp.Position + Vector3.new(0, fo, 0))
+        for _, f in ipairs(anims) do f(t) end
+    end))
+
+    Fx.buildRune = build
+    Fx.updateRuneColor = function() if paint then paint.set(runeCol()) end end
+    onCleanup(clear)
+end
+
+-- ==================== COSMETICS: BODY GLOW ====================
+do
+    local hl
+    Fx.GLOW_STYLES = { "Pulse", "Rainbow", "Outline", "Ghost", "Neon" }
+
+    local function clear()
+        if hl then pcall(function() hl:Destroy() end) end
+        hl = nil
+    end
+
+    local function build()
+        clear()
+        if not State.BodyGlow then return end
+        local char = LocalPlayer.Character
+        if not char then return end
+        hl = Instance.new("Highlight")
+        hl.Name = "AbaddonGlow"
+        hl.Adornee = char
+        hl.DepthMode = Enum.HighlightDepthMode.Occluded
+        hl.Parent = ScreenGui
+    end
+
+    track(RunService.RenderStepped:Connect(function()
+        if not hl then return end
+        local char = LocalPlayer.Character
+        if char and hl.Adornee ~= char then hl.Adornee = char end
+        local base = hexToColor3(State.GlowColorHex) or rgb(120, 200, 255)
+        local t, st = os.clock(), State.GlowStyle
+        if st == "Rainbow" then
+            local c = Color3.fromHSV((t * 0.2) % 1, 0.75, 1)
+            hl.FillColor, hl.OutlineColor = c, c
+            hl.FillTransparency, hl.OutlineTransparency = 0.55, 0.05
+        elseif st == "Outline" then
+            hl.OutlineColor = base
+            hl.FillTransparency, hl.OutlineTransparency = 1, 0
+        elseif st == "Ghost" then
+            hl.FillColor, hl.OutlineColor = base, C.White
+            hl.FillTransparency = 0.78
+            hl.OutlineTransparency = 0.35 + 0.25 * math.sin(t * 2)
+        elseif st == "Neon" then
+            hl.FillColor, hl.OutlineColor = base, C.White
+            hl.FillTransparency, hl.OutlineTransparency = 0.25, 0
+        else -- Pulse
+            hl.FillColor, hl.OutlineColor = base, base:Lerp(C.White, 0.4)
+            hl.FillTransparency = 0.5 + 0.35 * math.sin(t * 3)
+            hl.OutlineTransparency = 0.1
+        end
+    end))
+
+    Fx.buildGlow = build
+    onCleanup(clear)
+end
+
+-- ==================== COSMETICS: ORBITING ORBS ====================
+do
+    local root, anims, paint = nil, {}, nil
+    Fx.ORB_STYLES = { "Spheres", "Shards", "Stars" }
+
+    local function orbCol() return hexToColor3(State.OrbColorHex) or rgb(120, 200, 255) end
+
+    local function clear()
+        if root then pcall(function() root:Destroy() end) end
+        root, anims, paint = nil, {}, nil
+    end
+
+    local function build()
+        clear()
+        if not State.Orbs then return end
+        local char = LocalPlayer.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        local folder = fxFolder()
+        if not hrp or not folder then return end
+        paint = newPaint(orbCol())
+        root = newPart(folder)
+        root.Name = "AbaddonOrbs"
+        weld(hrp, root)
+        local st = State.OrbStyle
+
+        for i = 0, 3 do
+            local ph = i / 4 * 2 * math.pi
+            local cont = newPart(root)
+            local w = weld(root, cont)
+            local o
+            if st == "Shards" then
+                o = newPart(cont, Vector3.new(0.32, 0.95, 0.32))
+            elseif st == "Stars" then
+                o = newPart(cont, Vector3.new(0.18, 0.18, 0.18))
+                for _, sz in ipairs({ Vector3.new(0.9, 0.1, 0.1), Vector3.new(0.1, 0.9, 0.1), Vector3.new(0.1, 0.1, 0.9) }) do
+                    local b = newPart(o, sz)
+                    b.Transparency = 0.05
+                    weld(o, b)
+                    paint.part(b, 0.4)
+                end
+            else
+                o = newPart(cont, Vector3.new(0.7, 0.7, 0.7))
+                o.Shape = Enum.PartType.Ball
+            end
+            o.Transparency = 0.05
+            local ow = weld(cont, o, CFrame.new(3.2, 0, 0))
+            paint.part(o, 0.35)
+
+            if st ~= "Shards" then
+                local tr = Instance.new("Trail")
+                tr.Attachment0 = att(o, Vector3.new(0, 0.15, 0))
+                tr.Attachment1 = att(o, Vector3.new(0, -0.15, 0))
+                tr.Lifetime, tr.LightEmission, tr.LightInfluence = 0.7, 1, 0
+                tr.Transparency = ns({ 0, 0.1 }, { 1, 1 })
+                tr.WidthScale = ns({ 0, 1 }, { 1, 0 })
+                tr.FaceCamera = true
+                tr.Parent = o
+                paint.add(function(c) tr.Color = cs(c:Lerp(C.White, 0.5), c) end)
+            end
+
+            anims[#anims + 1] = function(t)
+                w.C0 = CFrame.Angles(0, ph + t * 1.5, 0) * CFrame.new(0, math.sin(t * 2 + ph) * 0.7, 0)
+                if st ~= "Spheres" then ow.C0 = CFrame.new(3.2, 0, 0) * CFrame.Angles(t * 2.5, t * 1.7, 0) end
             end
         end
+
+        local light = Instance.new("PointLight")
+        light.Brightness, light.Range = 1, 10
+        light.Parent = root
+        paint.add(function(c) light.Color = c end)
     end
 
-    if #sandyGhosts == 0 or not wc then return end
-    for i = #sandyGhosts, 1, -1 do
-        local g = sandyGhosts[i]
-        local age = (now - g.born) / SANDY_LIFE
-        if age >= 1 or not g.vp.Parent then
-            pcall(function() g.vp:Destroy() end)
-            table.remove(sandyGhosts, i)
-        else
-            g.cam.CFrame = wc.CFrame
-            g.cam.FieldOfView = wc.FieldOfView
-            g.vp.ImageTransparency = 0.4 + 0.6 * age
-            g.vp.ImageColor3 = rgb(120, 255, 160):Lerp(rgb(20, 120, 60), age)
-        end
-    end
-end))
+    track(RunService.RenderStepped:Connect(function()
+        if not root then return end
+        local t = os.clock()
+        for _, f in ipairs(anims) do f(t) end
+    end))
 
-local function setSandevistan(on, silent)
-    State.Sandevistan = on
-    local char = LocalPlayer.Character
-    local hum = char and char:FindFirstChildOfClass("Humanoid")
-    if on then
-        sandyPalette(true)
-        if not silent then
-            sandyFlashFx()
-            playSandySound()
-        end
-        if hum then hum.WalkSpeed = SANDY_SPEED end
-        if not sandyHL then
-            sandyHL = Instance.new("Highlight")
-            sandyHL.FillTransparency = 1
-            sandyHL.OutlineColor = SANDY_GREEN
-            sandyHL.OutlineTransparency = 0.2
-            sandyHL.DepthMode = Enum.HighlightDepthMode.Occluded
-            sandyHL.Adornee = char
-            sandyHL.Parent = ScreenGui
-        end
-        sandyLastPos = nil
-    else
-        sandyPalette(false)
-        clearGhosts()
-        if sandyHL then sandyHL:Destroy() sandyHL = nil end
-        if hum then hum.WalkSpeed = State.WalkSpeed end
+    Fx.buildOrbs = build
+    Fx.updateOrbColor = function() if paint then paint.set(orbCol()) end end
+    onCleanup(clear)
+end
+
+-- ==================== COSMETICS: FOOTPRINTS ====================
+do
+    local prints, lastPos, side = {}, nil, 1
+    local rp = RaycastParams.new()
+    rp.FilterType = Enum.RaycastFilterType.Exclude
+
+    track(RunService.Heartbeat:Connect(function()
+        if not State.Footprints then lastPos = nil return end
+        local char = LocalPlayer.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        local wc = workspace.CurrentCamera
+        if not hrp or not hum or not wc or hum.FloorMaterial == Enum.Material.Air then return end
+
+        local pos = hrp.Position
+        if not lastPos then lastPos = pos return end
+        local flat = Vector3.new(pos.X - lastPos.X, 0, pos.Z - lastPos.Z)
+        if flat.Magnitude < 2.4 then return end
+        local dir = flat.Unit
+        lastPos = pos
+        side = -side
+
+        local right = Vector3.new(-dir.Z, 0, dir.X)
+        rp.FilterDescendantsInstances = { char, wc }
+        local hit = workspace:Raycast(pos + right * side * 0.45, Vector3.new(0, -10, 0), rp)
+        if not hit then return end
+
+        local col = hexToColor3(State.FootColorHex) or rgb(140, 180, 255)
+        local p = Instance.new("Part")
+        p.Anchored = true
+        p.CanCollide, p.CanQuery, p.CanTouch, p.CastShadow = false, false, false, false
+        p.Material = Enum.Material.Neon
+        p.Size = Vector3.new(0.55, 0.05, 1.0)
+        p.Color = col
+        p.Transparency = 0.15
+        local at = hit.Position + hit.Normal * 0.04
+        p.CFrame = CFrame.lookAt(at, at + dir)
+        p.Parent = wc
+        TweenService:Create(p, TweenInfo.new(2.2, Enum.EasingStyle.Quad), { Transparency = 1 }):Play()
+        Debris:AddItem(p, 2.4)
+
+        prints[#prints + 1] = p
+        if #prints > 60 then table.remove(prints, 1) end
+    end))
+
+    onCleanup(function()
+        for _, p in ipairs(prints) do pcall(function() p:Destroy() end) end
+        prints = {}
+    end)
+end
+
+function Fx.rebuildAll()
+    for _, n in ipairs({ "buildHalo", "buildWings", "buildAura", "buildRune", "buildGlow", "buildOrbs" }) do
+        if Fx[n] then pcall(Fx[n]) end
     end
 end
-onCleanup(function()
-    State.Sandevistan = false
-    sandyPalette(false)
-    clearGhosts()
-end)
+
+-- ==================== FUN: SANDEVISTAN (with styles) ====================
+do
+    local SANDY_LIFE, SANDY_MAX = 0.65, 16
+    local ghosts, hl, cc = {}, nil, nil
+    local lastPos, lastT, flip = nil, 0, false
+    Fx.SANDY_STYLES = { "Matrix", "Cyberpunk", "Crimson", "Gold", "Ice", "Rainbow" }
+
+    local STY = {
+        Matrix    = { main = rgb(110, 255, 150), dark = rgb(20, 120, 60),  tint = rgb(150, 255, 175), flash = rgb(215, 255, 228) },
+        Cyberpunk = { main = rgb(0, 240, 255),   alt = rgb(255, 40, 200),  dark = rgb(70, 0, 120),    tint = rgb(210, 170, 255), flash = rgb(225, 235, 255) },
+        Crimson   = { main = rgb(255, 60, 70),   dark = rgb(100, 0, 10),   tint = rgb(255, 150, 150), flash = rgb(255, 220, 220) },
+        Gold      = { main = rgb(255, 215, 90),  dark = rgb(140, 80, 0),   tint = rgb(255, 225, 160), flash = rgb(255, 245, 215) },
+        Ice       = { main = rgb(160, 225, 255), dark = rgb(30, 80, 150),  tint = rgb(190, 230, 255), flash = rgb(240, 250, 255) },
+        Rainbow   = { rainbow = true, tint = rgb(255, 255, 255), flash = rgb(255, 255, 255) },
+    }
+
+    local function style() return STY[State.SandyStyle] or STY.Matrix end
+    local function mainColor()
+        local s = style()
+        if s.rainbow then return Color3.fromHSV((os.clock() * 0.6) % 1, 0.7, 1) end
+        return s.main
+    end
+    local function ghostColors()
+        local s = style()
+        if s.rainbow then
+            local h = (os.clock() * 0.6) % 1
+            return Color3.fromHSV(h, 0.7, 1), Color3.fromHSV((h + 0.15) % 1, 1, 0.35)
+        end
+        if s.alt then
+            flip = not flip
+            if flip then return s.alt, s.dark end
+        end
+        return s.main, s.dark
+    end
+
+    local sandyFlash = new("Frame", {
+        Name = "AbaddonSandyFlash", Size = UDim2.fromScale(1, 1), BackgroundColor3 = rgb(210, 255, 225),
+        BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 900, Active = false,
+    }, ScreenGui)
+
+    local function flashFx()
+        local s = style()
+        sandyFlash.BackgroundColor3 = s.flash
+        sandyFlash.BackgroundTransparency = 0.05
+        tween(sandyFlash, 0.8, { BackgroundTransparency = 1, BackgroundColor3 = mainColor() }, Enum.EasingStyle.Quad)
+        local blur = Instance.new("BlurEffect")
+        blur.Name = "AbaddonSandyBlur"
+        blur.Size = 30
+        blur.Parent = Lighting
+        tween(blur, 0.8, { Size = 0 })
+        Debris:AddItem(blur, 1)
+    end
+
+    local function playSound()
+        local s = Instance.new("Sound")
+        s.SoundId = SANDY_SOUND
+        s.Volume = 2
+        s.Parent = SoundService
+        s:Play()
+        Debris:AddItem(s, 15)
+    end
+
+    local function palette(on)
+        if on then
+            if not cc then
+                cc = Instance.new("ColorCorrectionEffect")
+                cc.Name = "AbaddonSandyCC"
+                cc.Parent = Lighting
+            end
+            local s = style()
+            tween(cc, 0.5, {
+                TintColor = s.tint, Saturation = s.rainbow and 0.4 or 0.15, Contrast = 0.18, Brightness = 0.02,
+            })
+        elseif cc then
+            local old = cc
+            cc = nil
+            tween(old, 0.5, { TintColor = C.White, Saturation = 0, Contrast = 0, Brightness = 0 })
+            task.delay(0.55, function() pcall(function() old:Destroy() end) end)
+        end
+    end
+
+    local function clearGhosts()
+        for _, g in ipairs(ghosts) do pcall(function() g.vp:Destroy() end) end
+        ghosts = {}
+    end
+
+    local function spawnGhost()
+        local char = LocalPlayer.Character
+        if not char then return end
+        local c0, c1 = ghostColors()
+        local vp = Instance.new("ViewportFrame")
+        vp.Name = "AbaddonGhost"
+        vp.Size = UDim2.fromScale(1, 1)
+        vp.BackgroundTransparency = 1
+        vp.BorderSizePixel = 0
+        vp.ZIndex = 2
+        vp.Active = false
+        vp.Ambient = c0
+        vp.LightColor = c0
+        vp.ImageColor3 = c0
+        vp.ImageTransparency = 0.4
+
+        local count = 0
+        for _, p in ipairs(char:GetDescendants()) do
+            if p:IsA("BasePart") and p.Name ~= "HumanoidRootPart" and not p:FindFirstAncestor("AbaddonFx")
+                and p.Transparency < 0.95 then
+                local ok, c = pcall(function() return p:Clone() end)
+                if ok and c then
+                    for _, d in ipairs(c:GetChildren()) do
+                        if not d:IsA("DataModelMesh") then d:Destroy() end
+                        if d:IsA("SpecialMesh") then pcall(function() d.TextureId = "" end) end
+                    end
+                    pcall(function() if c:IsA("MeshPart") then c.TextureID = "" end end)
+                    c.Anchored, c.CanCollide, c.CanQuery, c.CanTouch = true, false, false, false
+                    c.CastShadow = false
+                    c.Transparency = 0
+                    c.Material = Enum.Material.Neon
+                    c.Color = c0
+                    c.Parent = vp
+                    count = count + 1
+                end
+            end
+        end
+        if count == 0 then vp:Destroy() return end
+
+        local vcam = Instance.new("Camera")
+        vcam.Parent = vp
+        vp.CurrentCamera = vcam
+        local wc = workspace.CurrentCamera
+        if wc then vcam.CFrame, vcam.FieldOfView = wc.CFrame, wc.FieldOfView end
+        vp.Parent = ScreenGui
+
+        ghosts[#ghosts + 1] = { vp = vp, cam = vcam, born = os.clock(), c0 = c0, c1 = c1 }
+        while #ghosts > SANDY_MAX do
+            local old = table.remove(ghosts, 1)
+            pcall(function() old.vp:Destroy() end)
+        end
+    end
+
+    track(RunService.RenderStepped:Connect(function()
+        local now = os.clock()
+        local wc = workspace.CurrentCamera
+
+        if State.Sandevistan then
+            local char = LocalPlayer.Character
+            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+            if hl and char and hl.Adornee ~= char then hl.Adornee = char end
+            if hl and style().rainbow then hl.OutlineColor = mainColor() end
+            if hrp then
+                local pos = hrp.Position
+                if (not lastPos or (pos - lastPos).Magnitude >= 1.4) and now - lastT > 0.04 then
+                    if lastPos then pcall(spawnGhost) end
+                    lastPos, lastT = pos, now
+                end
+            end
+        end
+
+        if #ghosts == 0 or not wc then return end
+        for i = #ghosts, 1, -1 do
+            local g = ghosts[i]
+            local age = (now - g.born) / SANDY_LIFE
+            if age >= 1 or not g.vp.Parent then
+                pcall(function() g.vp:Destroy() end)
+                table.remove(ghosts, i)
+            else
+                g.cam.CFrame = wc.CFrame
+                g.cam.FieldOfView = wc.FieldOfView
+                g.vp.ImageTransparency = 0.4 + 0.6 * age
+                g.vp.ImageColor3 = g.c0:Lerp(g.c1, age)
+            end
+        end
+    end))
+
+    function Fx.setSandevistan(on, silent)
+        State.Sandevistan = on
+        local char = LocalPlayer.Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if on then
+            palette(true)
+            if not silent then
+                flashFx()
+                playSound()
+            end
+            if hum then hum.WalkSpeed = SANDY_SPEED end
+            if not hl then
+                hl = Instance.new("Highlight")
+                hl.FillTransparency = 1
+                hl.OutlineColor = mainColor()
+                hl.OutlineTransparency = 0.2
+                hl.DepthMode = Enum.HighlightDepthMode.Occluded
+                hl.Adornee = char
+                hl.Parent = ScreenGui
+            end
+            lastPos = nil
+        else
+            palette(false)
+            clearGhosts()
+            if hl then hl:Destroy() hl = nil end
+            if hum then hum.WalkSpeed = State.WalkSpeed end
+        end
+    end
+
+    function Fx.applySandyStyle()
+        if not State.Sandevistan then return end
+        palette(true)
+        if hl then hl.OutlineColor = mainColor() end
+    end
+
+    function Fx.sandyReset() lastPos = nil end
+
+    onCleanup(function()
+        State.Sandevistan = false
+        palette(false)
+        clearGhosts()
+    end)
+end
+
+-- ==================== VISUAL: OFF-SCREEN ARROWS ====================
+do
+    local pool = {}
+
+    local function getObj(key)
+        local o = pool[key]
+        if o then return o end
+        local holder = new("Frame", {
+            Size = UDim2.fromOffset(0, 0), BackgroundTransparency = 1, ZIndex = 240,
+            Active = false, Visible = false,
+        }, ScreenGui)
+        local arrow = new("Frame", {
+            Size = UDim2.fromOffset(20, 20), AnchorPoint = Vector2.new(0.5, 0.5),
+            BackgroundTransparency = 1, ZIndex = 240, Active = false,
+        }, holder)
+        local arms = {}
+        for _, sgn in ipairs({ 1, -1 }) do
+            local a = new("Frame", {
+                Size = UDim2.fromOffset(3, 14), AnchorPoint = Vector2.new(0.5, 0.5),
+                Position = UDim2.fromOffset(10 + sgn * 4.5, 7.4), Rotation = -sgn * 40,
+                BorderSizePixel = 0, BackgroundColor3 = C.White, ZIndex = 241, Active = false,
+            }, arrow)
+            stroke(a, C.Black)
+            arms[#arms + 1] = a
+        end
+        local lbl = new("TextLabel", {
+            Size = UDim2.fromOffset(60, 12), AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.fromOffset(0, 13),
+            BackgroundTransparency = 1, Text = "", TextColor3 = C.White, TextSize = 10,
+            TextStrokeTransparency = 0.4, ZIndex = 241, Active = false,
+        }, holder)
+        fontMed(lbl)
+        o = { holder = holder, arrow = arrow, arms = arms, lbl = lbl }
+        pool[key] = o
+        return o
+    end
+
+    track(RunService.RenderStepped:Connect(function()
+        local used = {}
+        local c = workspace.CurrentCamera
+        if State.OffArrows and c then
+            local me = myRoot()
+            local vs = c.ViewportSize
+            local cx, cy = vs.X / 2, vs.Y / 2
+            local R = State.ArrowRadius
+
+            local function show(key, pos, col)
+                local sp = c:WorldToViewportPoint(pos)
+                if sp.Z > 0 and sp.X >= 0 and sp.X <= vs.X and sp.Y >= 0 and sp.Y <= vs.Y then return end
+                local dx, dy = sp.X - cx, sp.Y - cy
+                if sp.Z < 0 then dx, dy = -dx, -dy end
+                local m = math.sqrt(dx * dx + dy * dy)
+                if m < 1 then dx, dy, m = 0, 1, 1 end
+                local ux, uy = dx / m, dy / m
+                local o = getObj(key)
+                used[key] = true
+                o.holder.Visible = true
+                o.holder.Position = UDim2.fromOffset(cx + ux * R, cy + uy * R)
+                o.arrow.Rotation = math.deg(math.atan2(ux, -uy))
+                for _, a in ipairs(o.arms) do a.BackgroundColor3 = col end
+                o.lbl.TextColor3 = col
+                if me then o.lbl.Text = string.format("%dm", math.floor((pos - me.Position).Magnitude)) end
+            end
+
+            for _, plr in ipairs(Players:GetPlayers()) do
+                if plr ~= LocalPlayer then
+                    local role = roleOf(plr)
+                    local hrp = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
+                    if hrp then
+                        if role == "killer" and State.ArrowKiller then
+                            show(plr, hrp.Position, ESPColors.Killer)
+                        elseif role == "survivor" and State.ArrowSurvivor then
+                            show(plr, hrp.Position, ESPColors.Survivor)
+                        end
+                    end
+                end
+            end
+            if State.ArrowGen then
+                for _, g in ipairs(ObjectsFound.gen) do
+                    if g.Parent then show(g, g:GetPivot().Position, ESPColors.Generator) end
+                end
+            end
+        end
+
+        for key, o in pairs(pool) do
+            if typeof(key) == "Instance" and not key.Parent then
+                o.holder:Destroy()
+                pool[key] = nil
+            elseif not used[key] then
+                o.holder.Visible = false
+            end
+        end
+    end))
+end
+
+-- ==================== VISUAL: NO FOG ====================
+do
+    local cache
+    function Fx.setNoFog(on)
+        State.NoFog = on
+        if on then
+            if cache then return end
+            cache = { FogEnd = Lighting.FogEnd, FogStart = Lighting.FogStart, atm = {} }
+            Lighting.FogStart, Lighting.FogEnd = 1e6, 1e6
+            for _, o in ipairs(Lighting:GetDescendants()) do
+                if o:IsA("Atmosphere") then
+                    cache.atm[o] = { o.Density, o.Haze }
+                    o.Density, o.Haze = 0, 0
+                end
+            end
+        elseif cache then
+            Lighting.FogEnd, Lighting.FogStart = cache.FogEnd, cache.FogStart
+            for o, v in pairs(cache.atm) do
+                if o.Parent then o.Density, o.Haze = v[1], v[2] end
+            end
+            cache = nil
+        end
+    end
+    track(RunService.Heartbeat:Connect(function()
+        if State.NoFog and cache and Lighting.FogEnd < 1e5 then
+            Lighting.FogStart, Lighting.FogEnd = 1e6, 1e6
+        end
+    end))
+    onCleanup(function() Fx.setNoFog(false) end)
+end
+
+-- ==================== GAMEPLAY: prompts / rejoin / alerts / HUD ====================
+do
+    -- Instant prompts (HoldDuration = 0 on every ProximityPrompt)
+    local ppStore, ppConn = {}, nil
+    local function instOne(p)
+        if p:IsA("ProximityPrompt") and p.HoldDuration ~= 0 then
+            ppStore[p] = p.HoldDuration
+            p.HoldDuration = 0
+        end
+    end
+    function Fx.setInstant(on)
+        State.InstantPrompts = on
+        if ppConn then ppConn:Disconnect() ppConn = nil end
+        if on then
+            for _, o in ipairs(workspace:GetDescendants()) do pcall(instOne, o) end
+            ppConn = workspace.DescendantAdded:Connect(function(o)
+                if State.InstantPrompts then task.defer(function() pcall(instOne, o) end) end
+            end)
+        else
+            for p, h in pairs(ppStore) do
+                if p.Parent then p.HoldDuration = h end
+            end
+            ppStore = {}
+        end
+    end
+    onCleanup(function() Fx.setInstant(false) end)
+
+    -- Auto interact (fires the nearest ProximityPrompt in range)
+    local prompts, lastScan, lastFire = {}, 0, 0
+    track(RunService.Heartbeat:Connect(function()
+        if not State.AutoInteract then return end
+        local now = os.clock()
+        local me = myRoot()
+        if not me then return end
+        if now - lastScan > 2 then
+            lastScan = now
+            prompts = {}
+            for _, o in ipairs(workspace:GetDescendants()) do
+                if o:IsA("ProximityPrompt") then prompts[#prompts + 1] = o end
+            end
+        end
+        if now - lastFire < 0.3 then return end
+        local best, bd
+        for _, p in ipairs(prompts) do
+            if p.Parent and p.Enabled then
+                local par = p.Parent
+                local pos
+                if par:IsA("Attachment") then pos = par.WorldPosition
+                elseif par:IsA("BasePart") then pos = par.Position
+                elseif par:IsA("Model") then pos = par:GetPivot().Position end
+                if pos then
+                    local d = (pos - me.Position).Magnitude
+                    if d <= math.min(State.InteractRange, p.MaxActivationDistance) and (not bd or d < bd) then
+                        best, bd = p, d
+                    end
+                end
+            end
+        end
+        if best then
+            lastFire = now
+            if fireproximityprompt then
+                pcall(fireproximityprompt, best)
+            else
+                pushLog("Auto Interact: fireproximityprompt not supported", "error")
+                State.AutoInteract = false
+                if Fx.autoInteractW then Fx.autoInteractW.Set(false) end
+            end
+        end
+    end))
+
+    -- Auto rejoin when disconnected / kicked
+    track(GuiService.ErrorMessageChanged:Connect(function(msg)
+        if State.AutoRejoin and msg and msg ~= "" then
+            task.wait(3)
+            pcall(function() TeleportService:Teleport(game.PlaceId, LocalPlayer) end)
+        end
+    end))
+
+    -- Killer looking at you
+    local LookLbl = new("TextLabel", {
+        Name = "AbaddonLook", Size = UDim2.fromOffset(260, 22), Position = UDim2.new(0.5, 0, 0, 70),
+        AnchorPoint = Vector2.new(0.5, 0), BackgroundColor3 = C.Bg, BorderSizePixel = 0,
+        Text = "! KILLER IS LOOKING AT YOU !", TextColor3 = C.Yellow, TextSize = 12,
+        Visible = false, ZIndex = 270, Active = false,
+    }, ScreenGui)
+    stroke(LookLbl, C.Yellow)
+    fontBold(LookLbl)
+
+    task.spawn(function()
+        while ScreenGui.Parent do
+            local show = false
+            if State.KillerLook and roleOf(LocalPlayer) ~= "killer" then
+                local me = myRoot()
+                if me then
+                    for _, plr in ipairs(Players:GetPlayers()) do
+                        if plr ~= LocalPlayer and roleOf(plr) == "killer" then
+                            local hrp = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
+                            if hrp then
+                                local off = me.Position - hrp.Position
+                                local d = off.Magnitude
+                                if d > 1 and d <= 90 and hrp.CFrame.LookVector:Dot(off.Unit) > 0.92 then
+                                    show = true
+                                    break
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+            LookLbl.Visible = show
+            task.wait(0.1)
+        end
+    end)
+
+    -- Info panels
+    local function mkPanel(y)
+        local f = new("Frame", {
+            Size = UDim2.fromOffset(200, 0), AutomaticSize = Enum.AutomaticSize.Y,
+            Position = UDim2.new(1, -10, 0, y), AnchorPoint = Vector2.new(1, 0),
+            BackgroundColor3 = C.Bg, BorderSizePixel = 0, Visible = false, ZIndex = 250,
+        }, ScreenGui)
+        stroke(f, C.Black)
+        topGradient(f, 2)
+        local l = new("TextLabel", {
+            Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1,
+            RichText = true, Text = "", TextColor3 = C.Text, TextSize = 11,
+            TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
+            ZIndex = 251, Active = false,
+        }, f)
+        new("UIPadding", {
+            PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8),
+            PaddingTop = UDim.new(0, 7), PaddingBottom = UDim.new(0, 5),
+        }, l)
+        fontMed(l)
+        return f, l
+    end
+    local hudF, hudL = mkPanel(38)
+    local plF, plL = mkPanel(118)
+
+    local function hexOf(c)
+        return string.format("rgb(%d,%d,%d)", math.floor(c.R * 255), math.floor(c.G * 255), math.floor(c.B * 255))
+    end
+    local DIM = 'rgb(120,120,120)'
+
+    task.spawn(function()
+        while ScreenGui.Parent do
+            hudF.Visible = State.ObjHUD
+            plF.Visible = State.PlayerList
+            local me = myRoot()
+
+            if State.ObjHUD then
+                local gens, alive, kd, gd = 0, 0, nil, nil
+                for _, g in ipairs(ObjectsFound.gen) do
+                    if g.Parent then
+                        gens = gens + 1
+                        if me then
+                            local d = (g:GetPivot().Position - me.Position).Magnitude
+                            if not gd or d < gd then gd = d end
+                        end
+                    end
+                end
+                for _, plr in ipairs(Players:GetPlayers()) do
+                    local role = roleOf(plr)
+                    local char = plr.Character
+                    local hum = char and char:FindFirstChildOfClass("Humanoid")
+                    if role == "survivor" and hum and hum.Health > 0 then alive = alive + 1 end
+                    if role == "killer" and plr ~= LocalPlayer and me then
+                        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+                        if hrp then
+                            local d = (hrp.Position - me.Position).Magnitude
+                            if not kd or d < kd then kd = d end
+                        end
+                    end
+                end
+                hudL.Text = string.format(
+                    '<font color="%s">generators</font>  %d\n<font color="%s">survivors</font>  %d\n<font color="%s">killer</font>  %s\n<font color="%s">nearest gen</font>  %s',
+                    DIM, gens, DIM, alive, DIM, kd and (math.floor(kd) .. "m") or "-",
+                    DIM, gd and (math.floor(gd) .. "m") or "-")
+            end
+
+            if State.PlayerList then
+                local lines = {}
+                for _, plr in ipairs(Players:GetPlayers()) do
+                    local role = roleOf(plr)
+                    if role and #lines < 14 then
+                        local char = plr.Character
+                        local hum = char and char:FindFirstChildOfClass("Humanoid")
+                        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+                        local col = role == "killer" and ESPColors.Killer or ESPColors.Survivor
+                        local dist = (me and hrp) and (math.floor((hrp.Position - me.Position).Magnitude) .. "m") or "-"
+                        local hp = hum and (math.floor(hum.Health) .. "hp") or "-"
+                        lines[#lines + 1] = string.format('<font color="%s">%s</font> <font color="%s">%s %s</font>',
+                            hexOf(col), plr.Name, DIM, dist, hp)
+                    end
+                end
+                plL.Text = #lines > 0 and table.concat(lines, "\n") or '<font color="' .. DIM .. '">no players</font>'
+            end
+            task.wait(0.4)
+        end
+    end)
+
+    -- TP to nearest survivor
+    function Fx.tpSurvivor()
+        local me = myRoot()
+        if not me then pushLog("Character not loaded", "error") return end
+        local best, bd
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if plr ~= LocalPlayer and roleOf(plr) == "survivor" then
+                local hrp = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    local d = (hrp.Position - me.Position).Magnitude
+                    if not bd or d < bd then best, bd = hrp.Position, d end
+                end
+            end
+        end
+        if best then tpTo(best, "nearest survivor") else pushLog("No survivors found", "warn") end
+    end
+end
 
 -- ==================== CONFIG SYSTEM ====================
 local function saveConfig()
@@ -2748,6 +3625,7 @@ local function applyConfigData(data, silent)
         end
         refreshIsland()
     end
+    Fx.rebuildAll()
     if not silent then pushLog("Config applied", "success") end
 end
 
@@ -2783,6 +3661,15 @@ local function simpleToggle(page, label, order, key, apply, colorOpt, onText, of
     end, key, colorOpt)
 end
 
+-- toggle that only stores a boolean in State (can default to ON)
+local function stTog(page, label, default, order, key)
+    return createToggle(page, label, default, order, function(v, silent)
+        State[key] = v
+        if silent then return end
+        pushLog(label .. ": " .. (v and "ON" or "OFF"), "info")
+    end, key)
+end
+
 -- ==================== VISUALS ====================
 createSection(VisualPage, "ESP", 1)
 
@@ -2801,32 +3688,42 @@ simpleToggle(VisualPage, "ESP Generators", 4, "ESP_Generators", nil, {
 simpleToggle(VisualPage, "ESP Hooks", 5, "ESP_Hooks")
 simpleToggle(VisualPage, "ESP Pallets", 6, "ESP_Pallets")
 simpleToggle(VisualPage, "ESP Exit Gates", 7, "ESP_Gates")
-simpleToggle(VisualPage, "ESP Info (dist / hp)", 8, "ESP_Info")
-tracerWidget = simpleToggle(VisualPage, "Tracers", 9, "Tracers", function(v) setTracers(v) end)
+simpleToggle(VisualPage, "ESP Items (medkit/chest..)", 8, "ESP_Items")
+simpleToggle(VisualPage, "ESP Info (dist / hp)", 9, "ESP_Info")
+tracerWidget = simpleToggle(VisualPage, "Tracers", 10, "Tracers", function(v) setTracers(v) end)
 
-createSection(VisualPage, "World", 10)
-simpleToggle(VisualPage, "Fullbright", 11, "Fullbright", function(v) setFullbright(v) end)
-simpleToggle(VisualPage, "No Shadows", 12, nil, function(v) setNoShadows(v) end, nil, "enabled", "disabled")
-simpleToggle(VisualPage, "No Textures", 13, nil, function(v, silent) setNoTextures(v, true) end, nil, "enabled", "disabled")
-simpleToggle(VisualPage, "Custom Time", 14, "CustomTime")
-createSlider(VisualPage, "Time of Day", 0, 24, 14, 15,
+createSection(VisualPage, "Off-screen Arrows", 11)
+simpleToggle(VisualPage, "Off-screen Arrows", 12, "OffArrows")
+stTog(VisualPage, "Arrow: Killer", true, 13, "ArrowKiller")
+stTog(VisualPage, "Arrow: Survivors", true, 14, "ArrowSurvivor")
+stTog(VisualPage, "Arrow: Generators", false, 15, "ArrowGen")
+createSlider(VisualPage, "Arrow Radius (px)", 80, 500, 220, 16,
+    function(v) State.ArrowRadius = v end, nil, "ArrowRadius")
+
+createSection(VisualPage, "World", 17)
+simpleToggle(VisualPage, "Fullbright", 18, "Fullbright", function(v) setFullbright(v) end)
+simpleToggle(VisualPage, "No Shadows", 19, nil, function(v) setNoShadows(v) end, nil, "enabled", "disabled")
+simpleToggle(VisualPage, "No Textures", 20, nil, function(v, silent) setNoTextures(v, true) end, nil, "enabled", "disabled")
+simpleToggle(VisualPage, "No Fog", 21, "NoFog", function(v) Fx.setNoFog(v) end)
+simpleToggle(VisualPage, "Custom Time", 22, "CustomTime")
+createSlider(VisualPage, "Time of Day", 0, 24, 14, 23,
     function(v) State.ClockTime = v if State.CustomTime then Lighting.ClockTime = v end end,
     function(v) pushLog("ClockTime: " .. tostring(v), "info") end,
     "ClockTime")
 
-createSection(VisualPage, "Camera", 16)
-createSlider(VisualPage, "Field of View", 30, 120, 70, 17,
+createSection(VisualPage, "Camera", 24)
+createSlider(VisualPage, "Field of View", 30, 120, 70, 25,
     function(v) setCameraFOV(v) end,
     function(v) pushLog("Camera FOV: " .. tostring(v), "info") end,
     "CameraFOV")
-simpleToggle(VisualPage, "Force Third Person", 18, "ThirdPerson", function(v) setThirdPerson(v) end)
-createToggle(VisualPage, "Shift Lock", true, 19, function(v, silent)
+simpleToggle(VisualPage, "Force Third Person", 26, "ThirdPerson", function(v) setThirdPerson(v) end)
+createToggle(VisualPage, "Shift Lock", true, 27, function(v, silent)
     State.ShiftLock = v
     if not v then releaseShiftLock() end
     if silent then return end
     pushLog("Shift Lock: " .. (v and "ON" or "OFF"), "info")
 end, "ShiftLock")
-createSlider(VisualPage, "Max Camera Zoom", 20, 500, 128, 20,
+createSlider(VisualPage, "Max Camera Zoom", 20, 500, 128, 28,
     function(v) State.MaxZoom = v end, nil, "MaxZoom")
 
 -- ==================== MAIN ====================
@@ -2836,23 +3733,36 @@ simpleToggle(MainPage, "Auto Hit Perfect Skillcheck", 2, "AutoSkillCheck")
 createSection(MainPage, "Protection", 3)
 simpleToggle(MainPage, "Anti-AFK", 4, "AntiAFK", function(v) setAntiAFK(v) end)
 simpleToggle(MainPage, "Anti-Fling", 5, nil, function(v) setAntiFling(v) end)
+simpleToggle(MainPage, "Auto Rejoin on Disconnect", 6, "AutoRejoin")
 
-createSection(MainPage, "Survival", 6)
-simpleToggle(MainPage, "Killer Proximity Alert", 7, "KillerAlert")
-createSlider(MainPage, "Alert Range (studs)", 20, 200, 60, 8,
+createSection(MainPage, "Interaction", 7)
+simpleToggle(MainPage, "Instant Prompts (no hold)", 8, "InstantPrompts", function(v) Fx.setInstant(v) end)
+Fx.autoInteractW = simpleToggle(MainPage, "Auto Interact (nearest)", 9, "AutoInteract")
+createSlider(MainPage, "Interact Range (studs)", 5, 40, 12, 10,
+    function(v) State.InteractRange = v end, nil, "InteractRange")
+
+createSection(MainPage, "Survival", 11)
+simpleToggle(MainPage, "Killer Proximity Alert", 12, "KillerAlert")
+createSlider(MainPage, "Alert Range (studs)", 20, 200, 60, 13,
     function(v) State.AlertRange = v end, nil, "AlertRange")
-simpleToggle(MainPage, "Radar", 9, "Radar")
-createSlider(MainPage, "Radar Range (studs)", 50, 300, 120, 10,
+simpleToggle(MainPage, "Killer Look Alert", 14, "KillerLook")
+simpleToggle(MainPage, "Radar", 15, "Radar")
+createSlider(MainPage, "Radar Range (studs)", 50, 300, 120, 16,
     function(v) State.RadarRange = v end, nil, "RadarRange")
 
-createSection(MainPage, "Quick Teleports", 11)
-createButton(MainPage, "TP Nearest Generator", 12, tpNearestGen)
-createButton(MainPage, "TP Exit Gate", 13, tpNearestGate)
-createButton(MainPage, "TP Far From Killer", 14, tpSafeSpot)
+createSection(MainPage, "Info HUD", 17)
+simpleToggle(MainPage, "Objective HUD", 18, "ObjHUD")
+simpleToggle(MainPage, "Player List", 19, "PlayerList")
 
-createSection(MainPage, "Spectate", 15)
-createTextAction(MainPage, "Spectate Player", "nickname", 16, function(name) spectate(name) end)
-createButton(MainPage, "Stop Spectating", 17, unspectate)
+createSection(MainPage, "Quick Teleports", 20)
+createButton(MainPage, "TP Nearest Generator", 21, tpNearestGen)
+createButton(MainPage, "TP Exit Gate", 22, tpNearestGate)
+createButton(MainPage, "TP Far From Killer", 23, tpSafeSpot)
+createButton(MainPage, "TP Nearest Survivor", 24, function() Fx.tpSurvivor() end)
+
+createSection(MainPage, "Spectate", 25)
+createTextAction(MainPage, "Spectate Player", "nickname", 26, function(name) spectate(name) end)
+createButton(MainPage, "Stop Spectating", 27, unspectate)
 
 -- ==================== MOVEMENT ====================
 createSection(MovementPage, "Character", 1)
@@ -2894,18 +3804,75 @@ end, "FakeLagTime")
 
 -- ==================== COSMETICS ====================
 createSection(CosmeticsPage, "Halo", 1)
-simpleToggle(CosmeticsPage, "Halo", 2, "Halo", function(v) setHalo(v) end, {
+simpleToggle(CosmeticsPage, "Halo", 2, "Halo", function(v) Fx.setHalo(v) end, {
     hex = State.HaloColorHex, stateKey = "HaloColorHex",
-    onColor = function(col, hex) State.HaloColorHex = hex updateHaloColor() end,
+    onColor = function(col, hex) State.HaloColorHex = hex Fx.updateHaloColor() end,
 })
+createSelector(CosmeticsPage, "Style (LMB/RMB)", Fx.HALO_STYLES, "Classic", 3, function(v, silent)
+    State.HaloStyle = v
+    Fx.buildHalo()
+    if not silent then pushLog("Halo style: " .. v, "info") end
+end, "HaloStyle")
 
-createSection(CosmeticsPage, "Trail", 3)
-simpleToggle(CosmeticsPage, "Trail", 4, "Trail", function(v) applyTrail() end)
-createSelector(CosmeticsPage, "Style (LMB/RMB)", TRAIL_STYLES, "Default", 5, function(v, silent)
-    State.TrailStyle = v
-    applyTrail()
-    if not silent then pushLog("Trail style: " .. v, "info") end
-end, "TrailStyle")
+createSection(CosmeticsPage, "Particle Wings", 4)
+simpleToggle(CosmeticsPage, "Wings", 5, "Wings", function(v) Fx.buildWings() end)
+createSelector(CosmeticsPage, "Style (LMB/RMB)", Fx.WING_STYLES, "Angelic", 6, function(v, silent)
+    State.WingStyle = v
+    Fx.buildWings()
+    if not silent then pushLog("Wings style: " .. v, "info") end
+end, "WingStyle")
+createSlider(CosmeticsPage, "Wing Size (%)", 50, 200, 100, 7,
+    function(v, silent)
+        State.WingSize = v
+        if silent then task.defer(Fx.buildWings) end
+    end,
+    function(v) Fx.buildWings() end, "WingSize")
+
+createSection(CosmeticsPage, "Aura", 8)
+simpleToggle(CosmeticsPage, "Aura", 9, "Aura", function(v) Fx.buildAura() end)
+createSelector(CosmeticsPage, "Style (LMB/RMB)", Fx.AURA_STYLES, "Spirit", 10, function(v, silent)
+    State.AuraStyle = v
+    Fx.buildAura()
+    if not silent then pushLog("Aura style: " .. v, "info") end
+end, "AuraStyle")
+
+createSection(CosmeticsPage, "Rune Circle", 11)
+simpleToggle(CosmeticsPage, "Rune Circle", 12, "Rune", function(v) Fx.buildRune() end, {
+    hex = State.RuneColorHex, stateKey = "RuneColorHex",
+    onColor = function(col, hex) State.RuneColorHex = hex Fx.updateRuneColor() end,
+})
+createSelector(CosmeticsPage, "Style (LMB/RMB)", Fx.RUNE_STYLES, "Hex", 13, function(v, silent)
+    State.RuneStyle = v
+    Fx.buildRune()
+    if not silent then pushLog("Rune style: " .. v, "info") end
+end, "RuneStyle")
+
+createSection(CosmeticsPage, "Body Glow", 14)
+simpleToggle(CosmeticsPage, "Body Glow", 15, "BodyGlow", function(v) Fx.buildGlow() end, {
+    hex = State.GlowColorHex, stateKey = "GlowColorHex",
+    onColor = function(col, hex) State.GlowColorHex = hex end,
+})
+createSelector(CosmeticsPage, "Style (LMB/RMB)", Fx.GLOW_STYLES, "Pulse", 16, function(v, silent)
+    State.GlowStyle = v
+    if not silent then pushLog("Glow style: " .. v, "info") end
+end, "GlowStyle")
+
+createSection(CosmeticsPage, "Orbiting Orbs", 17)
+simpleToggle(CosmeticsPage, "Orbs", 18, "Orbs", function(v) Fx.buildOrbs() end, {
+    hex = State.OrbColorHex, stateKey = "OrbColorHex",
+    onColor = function(col, hex) State.OrbColorHex = hex Fx.updateOrbColor() end,
+})
+createSelector(CosmeticsPage, "Style (LMB/RMB)", Fx.ORB_STYLES, "Spheres", 19, function(v, silent)
+    State.OrbStyle = v
+    Fx.buildOrbs()
+    if not silent then pushLog("Orbs style: " .. v, "info") end
+end, "OrbStyle")
+
+createSection(CosmeticsPage, "Footprints", 20)
+simpleToggle(CosmeticsPage, "Neon Footprints", 21, "Footprints", nil, {
+    hex = State.FootColorHex, stateKey = "FootColorHex",
+    onColor = function(col, hex) State.FootColorHex = hex end,
+})
 
 -- ==================== FUN ====================
 createSection(FunPage, "Character", 1)
@@ -2921,7 +3888,12 @@ createInput(FunPage, "Crosshair Size", 10, 7, function(v)
 end, "CrosshairSize")
 
 createSection(FunPage, "Sandevistan", 8)
-simpleToggle(FunPage, "Sandevistan (speed 22)", 9, "Sandevistan", function(v, silent) setSandevistan(v, silent) end)
+simpleToggle(FunPage, "Sandevistan (speed 22)", 9, "Sandevistan", function(v, silent) Fx.setSandevistan(v, silent) end)
+createSelector(FunPage, "Style (LMB/RMB)", Fx.SANDY_STYLES, "Matrix", 10, function(v, silent)
+    State.SandyStyle = v
+    Fx.applySandyStyle()
+    if not silent then pushLog("Sandevistan style: " .. v, "info") end
+end, "SandyStyle")
 
 -- ==================== SETTINGS ====================
 createSection(SettingsPage, "Interface", 1)
@@ -3057,6 +4029,7 @@ local OBJ_COLORS = {
     hook   = Color3.fromRGB(226, 96, 96),
     pallet = Color3.fromRGB(214, 175, 98),
     gate   = Color3.fromRGB(120, 170, 255),
+    item   = Color3.fromRGB(190, 140, 255),
 }
 
 local function applyObjectESP()
@@ -3089,7 +4062,7 @@ local function applyObjectESP()
 end
 
 local function needObjectScan()
-    if State.Radar then return true end
+    if State.Radar or State.ObjHUD or (State.OffArrows and State.ArrowGen) then return true end
     for _, d in ipairs(OBJ_DEFS) do
         if State[d.key] then return true end
     end
@@ -3301,9 +4274,8 @@ LocalPlayer.CharacterAdded:Connect(function(char)
             end
         end)
     end
-    if State.Halo then buildHalo() end
-    if State.Trail then applyTrail() end
-    sandyLastPos = nil
+    Fx.rebuildAll()
+    Fx.sandyReset()
 end)
 
 -- ==================== BOOT ====================
